@@ -1,0 +1,11 @@
+# Byte-compiled / autoload artifacts
+*.elc
+*-autoloads.el
+*.eln
+/eln-cache/
+
+# Editor / OS cruft
+.DS_Store
+*~
+\#*\#
+.\#*
