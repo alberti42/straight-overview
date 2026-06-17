@@ -57,6 +57,11 @@
 (require 'tabulated-list)
 (require 'straight)
 
+;; Optional integration: `straight-overview-changelog' uses Magit when it is
+;; available, but Magit is not a hard dependency.
+(declare-function magit-log-setup-buffer "magit-log"
+                  (revs args files &optional locked focus))
+
 (defgroup straight-overview nil
   "Overview of straight.el packages and their upstream status."
   :group 'straight)
@@ -301,28 +306,41 @@ restart (the merge registers a repo modification)."
          (url (and rec (plist-get rec :url))))
     (if url (browse-url url) (message "No remote URL for this package"))))
 
+(defun straight-overview--changelog-plain (name dir range)
+  "Show RANGE commits for package NAME in DIR as a plain `git log' buffer."
+  (let ((log (straight-overview--git dir "log" "--oneline" "--decorate" range)))
+    (if (or (null log) (string-empty-p log))
+        (message "%s: up to date" name)
+      (with-current-buffer (get-buffer-create
+                            (format "*straight-overview-log: %s*" name))
+        (let ((inhibit-read-only t))
+          (erase-buffer)
+          (insert (format "Pending commits for %s (%s):\n\n" name range))
+          (insert log "\n"))
+        (goto-char (point-min))
+        (special-mode)
+        (pop-to-buffer (current-buffer))))))
+
 (defun straight-overview-changelog ()
-  "Show the pending commits (HEAD..upstream) for the package at point."
+  "Show the pending commits (HEAD..upstream) for the package at point.
+When Magit is available, open a `magit-log' buffer so each commit is
+actionable (RET to inspect it, etc.); otherwise fall back to a plain
+`git log --oneline' listing."
   (interactive)
   (let ((rec (straight-overview--record-at-point)))
     (if (or (null rec) (null (plist-get rec :upstream)))
         (message "No upstream to compare against")
       (let* ((name (plist-get rec :name))
-             (upstream (plist-get rec :upstream))
-             (log (straight-overview--git (plist-get rec :dir)
-                                          "log" "--oneline" "--decorate"
-                                          (format "HEAD..%s" upstream))))
-        (if (or (null log) (string-empty-p log))
-            (message "%s: up to date" name)
-          (with-current-buffer (get-buffer-create
-                                (format "*straight-overview-log: %s*" name))
-            (let ((inhibit-read-only t))
-              (erase-buffer)
-              (insert (format "Pending commits for %s (HEAD..%s):\n\n" name upstream))
-              (insert log "\n"))
-            (goto-char (point-min))
-            (special-mode)
-            (pop-to-buffer (current-buffer))))))))
+             (dir (plist-get rec :dir))
+             (range (format "HEAD..%s" (plist-get rec :upstream))))
+        (cond
+         ((not (and (plist-get rec :commits) (> (plist-get rec :commits) 0)))
+          (message "%s: up to date" name))
+         ((require 'magit nil t)
+          (let ((default-directory (file-name-as-directory dir)))
+            (magit-log-setup-buffer (list range) (list "-n256" "--decorate") nil)))
+         (t
+          (straight-overview--changelog-plain name dir range)))))))
 
 ;;; Mode
 

@@ -60,7 +60,7 @@ Requires Emacs 29.1+.
 | <kbd>U</kbd> | unmark all |
 | <kbd>M</kbd> | mark all outdated packages |
 | <kbd>x</kbd> | pull marked packages (and rebuild, if enabled) |
-| <kbd>c</kbd> | show changelog (`HEAD..upstream`) for package at point |
+| <kbd>c</kbd> | show changelog (`HEAD..upstream`) for package at point — a `magit-log` buffer when Magit is available (each commit actionable), else a plain `git log` listing |
 | <kbd>o</kbd> / <kbd>RET</kbd> | open the package's repo in a browser |
 | <kbd>a</kbd> | toggle outdated-only / show all packages |
 | <kbd>g</kbd> | re-scan from local refs (no fetch) |
