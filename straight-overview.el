@@ -98,6 +98,11 @@ restart (the merge registers a repo modification)."
 (defvar-local straight-overview--show nil
   "Buffer-local copy of `straight-overview-show'.")
 
+(defvar straight-overview--log-buffers nil
+  "Magit log buffers opened by `straight-overview-changelog'.
+Used to reuse an already-visible changelog window instead of
+popping a new one for each package.")
+
 ;;; Git plumbing
 
 (defun straight-overview--git (dir &rest args)
@@ -306,6 +311,24 @@ restart (the merge registers a repo modification)."
          (url (and rec (plist-get rec :url))))
     (if url (browse-url url) (message "No remote URL for this package"))))
 
+(defun straight-overview--display-log (buffer)
+  "Display BUFFER, reusing a visible `straight-overview' log window if any.
+Intended as a `magit-display-buffer-function'.  When one of our
+previously-opened changelog buffers is currently visible, replace its
+window's contents with BUFFER; otherwise pop up a new window (never the
+overview window itself).  Returns the window, as magit requires."
+  (let ((win (seq-some (lambda (b)
+                         (and (buffer-live-p b) (get-buffer-window b 'visible)))
+                       straight-overview--log-buffers)))
+    (if (window-live-p win)
+        (progn (set-window-buffer win buffer) win)
+      (display-buffer
+       buffer
+       '((display-buffer-reuse-window
+          display-buffer-pop-up-window
+          display-buffer-use-some-window)
+         (inhibit-same-window . t))))))
+
 (defun straight-overview--changelog-plain (name dir range)
   "Show RANGE commits for package NAME in DIR as a plain `git log' buffer."
   (let ((log (straight-overview--git dir "log" "--oneline" "--decorate" range)))
@@ -337,8 +360,13 @@ actionable (RET to inspect it, etc.); otherwise fall back to a plain
          ((not (and (plist-get rec :commits) (> (plist-get rec :commits) 0)))
           (message "%s: up to date" name))
          ((require 'magit nil t)
-          (let ((default-directory (file-name-as-directory dir)))
-            (magit-log-setup-buffer (list range) (list "-n256" "--decorate") nil)))
+          (let* ((default-directory (file-name-as-directory dir))
+                 (magit-display-buffer-function #'straight-overview--display-log)
+                 (buf (magit-log-setup-buffer (list range) (list "-n256" "--decorate") nil)))
+            (setq straight-overview--log-buffers
+                  (cons buf (seq-filter (lambda (b)
+                                          (and (buffer-live-p b) (not (eq b buf))))
+                                        straight-overview--log-buffers)))))
          (t
           (straight-overview--changelog-plain name dir range)))))))
 
