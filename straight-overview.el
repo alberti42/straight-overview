@@ -23,7 +23,7 @@
 ;; `M-x straight-overview' opens a `tabulated-list-mode' buffer with one row
 ;; per git-managed package:
 ;;
-;;   Package | Installed | Branch | Behind | Tag | Remote
+;;   Pin | Package | Installed | Branch | Behind | Tag | Remote
 ;;
 ;; The "Behind" column shows `(<commits>; <time>)' -- how many commits and how
 ;; much wall-clock time the installed checkout is behind the tracked upstream
@@ -42,8 +42,17 @@
 ;;   g   re-scan (local, no fetch)
 ;;   G   straight-fetch-all, then re-scan
 ;;
-;; Customize `straight-overview-fetch-on-open', `straight-overview-show' and
-;; `straight-overview-build-on-pull' to taste.
+;; Packages can also be pinned (held), which marks them in the Pin column,
+;; fades the row, and makes them un-markable:
+;;
+;;   P   pin at the current commit       R   restore to the pinned commit
+;;   F   free (unpin)
+;;
+;; Pins persist to `straight-overview-pinned-file' when set.
+;;
+;; Customize `straight-overview-fetch-on-open', `straight-overview-show',
+;; `straight-overview-build-on-pull' and `straight-overview-pinned-file' to
+;; taste.
 ;;
 ;; Requires a working straight.el installation (https://github.com/radian-software/straight.el).
 ;; straight.el is not distributed through a package archive, so it cannot be
@@ -94,8 +103,22 @@ debugging the built-in path)."
 (defcustom straight-overview-build-on-pull nil
   "When non-nil, also rebuild each package immediately after pulling.
 When nil, straight rebuilds the modified repos on the next Emacs
-restart (the merge registers a repo modification)."
+restart (the merge registers a repo modification).
+Also governs whether `straight-overview-restore' rebuilds in-session."
   :type 'boolean
+  :group 'straight-overview)
+
+(defcustom straight-overview-pinned-file nil
+  "File where pinned packages are persisted, or nil for no persistence.
+When set to a path, pins are stored there as an alist of
+\(PACKAGE-NAME . COMMIT) in plain `.eld' form, read on first use and
+rewritten on every pin/unpin.  When nil, pinning still works but is
+session-only (lost when Emacs exits).
+
+A pinned package is shown in the overview but cannot be marked for
+update; `straight-overview-restore' resets it to its pinned commit."
+  :type '(choice (const :tag "No persistence (session-only)" nil)
+                 (file :tag "Lockfile (.eld)"))
   :group 'straight-overview)
 
 (defface straight-overview-outdated
@@ -127,6 +150,38 @@ popping a new one for each package.")
 
 (defvar-local straight-overview--mark-overlays nil
   "Overlays highlighting the currently marked rows.")
+
+(defvar straight-overview--pins nil
+  "Alist of (PACKAGE-NAME . COMMIT) for pinned packages.
+Loaded from `straight-overview-pinned-file' and the source of truth
+for pin state across the session.")
+(defvar straight-overview--pins-loaded nil
+  "Non-nil once `straight-overview--pins' has been read from disk.")
+
+;;; Pins
+
+(defun straight-overview--ensure-pins ()
+  "Load pinned packages from `straight-overview-pinned-file' once."
+  (unless straight-overview--pins-loaded
+    (setq straight-overview--pins
+          (when (and straight-overview-pinned-file
+                     (file-readable-p straight-overview-pinned-file))
+            (with-temp-buffer
+              (insert-file-contents straight-overview-pinned-file)
+              (ignore-errors (read (current-buffer)))))
+          straight-overview--pins-loaded t)))
+
+(defun straight-overview--save-pins ()
+  "Persist `straight-overview--pins' to `straight-overview-pinned-file'."
+  (when straight-overview-pinned-file
+    (with-temp-file straight-overview-pinned-file
+      (let ((print-length nil) (print-level nil))
+        (prin1 straight-overview--pins (current-buffer))
+        (insert "\n")))))
+
+(defun straight-overview--pinned-p (name)
+  "Return the pinned commit for package NAME, or nil if not pinned."
+  (cdr (assoc name straight-overview--pins)))
 
 ;;; Git plumbing
 
@@ -171,6 +226,7 @@ popping a new one for each package.")
                          (straight-overview--git dir "symbolic-ref" "--short" "HEAD")))
              (upstream (and branch (format "%s/%s" remote branch)))
              (installed (or (straight-overview--git dir "rev-parse" "--short" "HEAD") "?"))
+             (commit (straight-overview--git dir "rev-parse" "HEAD"))
              (tag (or (straight-overview--git dir "describe" "--tags" "--abbrev=0") ""))
              (url (straight-overview--url recipe))
              (count-str (and upstream
@@ -187,9 +243,9 @@ popping a new one for each package.")
                            (t (format "(%d; %s)" commits
                                       (straight-overview--duration (or behind-secs 0)))))))
         (list :name name :dir dir :branch (or branch "?") :remote remote
-              :upstream upstream :url url :installed installed :tag tag
-              :commits commits :behind behind :behind-secs (or behind-secs 0)
-              :outdated outdated)))))
+              :upstream upstream :url url :installed installed :commit commit
+              :tag tag :commits commits :behind behind
+              :behind-secs (or behind-secs 0) :outdated outdated)))))
 
 (defun straight-overview--collect ()
   "Scan every straight package, returning a sorted list of status plists."
@@ -209,17 +265,24 @@ popping a new one for each package.")
           (mapcar
            (lambda (rec)
              (when (or (eq show 'all) (plist-get rec :outdated))
-               (list (plist-get rec :name)
-                     (vector
-                      (plist-get rec :name)
-                      (plist-get rec :installed)
-                      (plist-get rec :branch)
-                      (if (plist-get rec :outdated)
-                          (propertize (plist-get rec :behind)
-                                      'face 'straight-overview-outdated)
-                        (plist-get rec :behind))
-                      (plist-get rec :tag)
-                      (or (plist-get rec :url) "")))))
+               (let* ((name (plist-get rec :name))
+                      (pinned (straight-overview--pinned-p name))
+                      (behind (if (plist-get rec :outdated)
+                                  (propertize (plist-get rec :behind)
+                                              'face 'straight-overview-outdated)
+                                (plist-get rec :behind)))
+                      (cells (list (if pinned "*" "")
+                                   name
+                                   (plist-get rec :installed)
+                                   (plist-get rec :branch)
+                                   behind
+                                   (plist-get rec :tag)
+                                   (or (plist-get rec :url) ""))))
+                 ;; Pinned rows are faded so "outdated but held" reads as parked.
+                 (when pinned
+                   (setq cells (mapcar (lambda (c) (propertize c 'face 'shadow))
+                                       cells)))
+                 (list name (apply #'vector cells)))))
            straight-overview--records))))
 
 (defun straight-overview--redraw-marks ()
@@ -251,6 +314,7 @@ popping a new one for each package.")
   "Recompute package status from local git refs (no fetch)."
   (interactive)
   (message "straight-overview: scanning repositories...")
+  (straight-overview--ensure-pins)
   (setq straight-overview--records (straight-overview--collect))
   (straight-overview--render)
   (message "straight-overview: %d package(s), %d outdated"
@@ -276,10 +340,15 @@ popping a new one for each package.")
 ;;; Marking
 
 (defun straight-overview-mark ()
-  "Mark the package at point for update and move to the next line."
+  "Mark the package at point for update and move to the next line.
+Pinned packages cannot be marked."
   (interactive)
   (let ((id (tabulated-list-get-id)))
-    (when id (puthash id t straight-overview--marks)))
+    (cond
+     ((null id) nil)
+     ((straight-overview--pinned-p id)
+      (message "%s is pinned; press F to unpin first" id))
+     (t (puthash id t straight-overview--marks))))
   (straight-overview--redraw-marks)
   (forward-line 1))
 
@@ -298,10 +367,11 @@ popping a new one for each package.")
   (straight-overview--redraw-marks))
 
 (defun straight-overview-mark-outdated ()
-  "Mark every outdated package."
+  "Mark every outdated package (skipping pinned ones)."
   (interactive)
   (dolist (rec straight-overview--records)
-    (when (plist-get rec :outdated)
+    (when (and (plist-get rec :outdated)
+               (not (straight-overview--pinned-p (plist-get rec :name))))
       (puthash (plist-get rec :name) t straight-overview--marks)))
   (straight-overview--redraw-marks))
 
@@ -310,6 +380,84 @@ popping a new one for each package.")
   (let (names)
     (maphash (lambda (k _v) (push k names)) straight-overview--marks)
     (sort names #'string<)))
+
+;;; Pinning
+
+(defun straight-overview-pin ()
+  "Pin the package at point at its current commit, then move to next line.
+A pinned package is held: it cannot be marked for update.  The pin
+records the currently installed commit so `straight-overview-restore'
+can reset to it later."
+  (interactive)
+  (let ((rec (straight-overview--record-at-point)))
+    (when rec
+      (let ((name (plist-get rec :name)))
+        (setf (alist-get name straight-overview--pins nil nil #'equal)
+              (plist-get rec :commit))
+        (remhash name straight-overview--marks)
+        (straight-overview--save-pins)
+        (straight-overview--render))))
+  (forward-line 1))
+
+(defun straight-overview-unpin ()
+  "Remove the pin on the package at point (\"free\"), then move to next line.
+This only updates the pin list; it does not touch the git repository."
+  (interactive)
+  (let ((rec (straight-overview--record-at-point)))
+    (when rec
+      (setf (alist-get (plist-get rec :name) straight-overview--pins nil 'remove #'equal)
+            nil)
+      (straight-overview--save-pins)
+      (straight-overview--render)))
+  (forward-line 1))
+
+(defun straight-overview--restore-branch (name dir remote)
+  "Determine the branch to reattach to for package NAME in DIR (REMOTE).
+Prefers the recipe's `:branch', then the current branch, then the
+remote's default branch, falling back to \"master\"."
+  (let ((recipe (gethash name straight--recipe-cache)))
+    (or (plist-get recipe :branch)
+        (let ((b (straight-overview--git dir "symbolic-ref" "--short" "HEAD")))
+          (and b (not (string-empty-p b)) b))
+        (let ((d (straight-overview--git dir "rev-parse" "--abbrev-ref"
+                                         (format "%s/HEAD" remote))))
+          (and d (string-prefix-p (concat remote "/") d)
+               (substring d (1+ (length remote)))))
+        "master")))
+
+(defun straight-overview-restore ()
+  "Restore the package at point to its pinned commit.
+Reattaches to the branch straight tracks and `git reset --hard's it to
+the pinned commit (so there is never a detached HEAD; a later pull
+fast-forwards the branch normally).  Rebuilds in-session when
+`straight-overview-build-on-pull' is non-nil, otherwise straight
+rebuilds on the next restart.  A no-op if the package is not pinned."
+  (interactive)
+  (let* ((rec (straight-overview--record-at-point))
+         (name (and rec (plist-get rec :name)))
+         (commit (and name (straight-overview--pinned-p name))))
+    (cond
+     ((null rec) (message "No package at point"))
+     ((null commit) (message "%s is not pinned" name))
+     ((not (yes-or-no-p
+            (format "Reset %s to pinned commit %s (discards local changes)? "
+                    name (substring commit 0 (min 7 (length commit))))))
+      (message "Aborted"))
+     (t
+      (let* ((dir (plist-get rec :dir))
+             (remote (plist-get rec :remote))
+             (branch (straight-overview--restore-branch name dir remote)))
+        (message "straight-overview: restoring %s to %s..."
+                 name (substring commit 0 (min 7 (length commit))))
+        (straight-overview--git dir "checkout" branch)
+        (straight-overview--git dir "reset" "--hard" commit)
+        (when straight-overview-build-on-pull
+          (straight-rebuild-package name))
+        (straight-overview-refresh)
+        (message "%s restored to %s on %s%s"
+                 name (substring commit 0 (min 7 (length commit))) branch
+                 (if straight-overview-build-on-pull
+                     " (rebuilt)" " (rebuild on next restart)")))))))
 
 ;;; Actions
 
@@ -425,6 +573,9 @@ actionable (RET to inspect it, etc.); otherwise fall back to a plain
   "U"   #'straight-overview-unmark-all
   "M"   #'straight-overview-mark-outdated
   "x"   #'straight-overview-execute
+  "P"   #'straight-overview-pin
+  "F"   #'straight-overview-unpin
+  "R"   #'straight-overview-restore
   "c"   #'straight-overview-changelog
   "o"   #'straight-overview-browse
   "RET" #'straight-overview-browse
@@ -435,7 +586,8 @@ actionable (RET to inspect it, etc.); otherwise fall back to a plain
 (define-derived-mode straight-overview-mode tabulated-list-mode "Straight-Overview"
   "Major mode listing straight.el packages and their upstream status."
   (setq tabulated-list-format
-        [("Package"   28 t)
+        [("Pin"        3 nil)
+         ("Package"   28 t)
          ("Installed" 10 nil)
          ("Branch"    14 t)
          ("Behind"    18 straight-overview--behind-lessp)
