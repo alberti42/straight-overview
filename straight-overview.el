@@ -188,7 +188,8 @@ popping a new one for each package.")
                                       (straight-overview--duration (or behind-secs 0)))))))
         (list :name name :dir dir :branch (or branch "?") :remote remote
               :upstream upstream :url url :installed installed :tag tag
-              :commits commits :behind behind :outdated outdated)))))
+              :commits commits :behind behind :behind-secs (or behind-secs 0)
+              :outdated outdated)))))
 
 (defun straight-overview--collect ()
   "Scan every straight package, returning a sorted list of status plists."
@@ -318,6 +319,17 @@ popping a new one for each package.")
     (and id (seq-find (lambda (r) (equal (plist-get r :name) id))
                       straight-overview--records))))
 
+(defun straight-overview--behind-secs (id)
+  "Return the seconds-behind-upstream for package ID (0 if unknown)."
+  (let ((rec (seq-find (lambda (r) (equal (plist-get r :name) id))
+                       straight-overview--records)))
+    (or (and rec (plist-get rec :behind-secs)) 0)))
+
+(defun straight-overview--behind-lessp (a b)
+  "Sort predicate for the Behind column: compare entries A and B by time behind."
+  (< (straight-overview--behind-secs (car a))
+     (straight-overview--behind-secs (car b))))
+
 (defun straight-overview-execute ()
   "Pull every marked package, optionally rebuilding, then refresh."
   (interactive)
@@ -426,7 +438,7 @@ actionable (RET to inspect it, etc.); otherwise fall back to a plain
         [("Package"   28 t)
          ("Installed" 10 nil)
          ("Branch"    14 t)
-         ("Behind"    18 t)
+         ("Behind"    18 straight-overview--behind-lessp)
          ("Tag"       14 t)
          ("Remote"     0 nil)])
   (setq tabulated-list-padding 2)
