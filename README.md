@@ -7,6 +7,8 @@ A read-only overview and **selective-upgrade UI** for packages managed by
 question — *which* of my packages have newer commits upstream, and *how far*
 behind am I? — and lets you upgrade only the ones you choose, dired-style.
 
+![straight-overview buffer: packages with their behind-upstream counts; marked rows highlighted, pinned rows faded](screenshot.jpg)
+
 ```
 M-x straight-overview
 ```
