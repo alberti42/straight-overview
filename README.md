@@ -101,6 +101,18 @@ header, etc.).
 | `straight-overview-build-on-pull` | `nil` | `nil` pulls only — straight rebuilds the modified repos on the next Emacs restart. `t` also runs `straight-rebuild-package` immediately, doing everything in one go. Also governs whether <kbd>R</kbd> rebuilds in-session. |
 | `straight-overview-pinned-file` | `nil` | When set to a path, pinned packages persist there as an `.eld` alist of `(name . commit)`. When `nil`, pinning is session-only. |
 
+The overview opens in the **selected window** by default. Because it is shown
+via `display-buffer`, you can place it anywhere with `display-buffer-alist`,
+keyed on the buffer name `*straight-overview*`. For example, to open it in a
+side window at the bottom:
+
+```elisp
+(add-to-list 'display-buffer-alist
+             '("\\`\\*straight-overview\\*\\'"
+               (display-buffer-in-side-window)
+               (side . bottom) (window-height . 0.4)))
+```
+
 ## Notes & limitations
 
 - **"Latest stable" vs "unstable".** straight has no stable/unstable concept —

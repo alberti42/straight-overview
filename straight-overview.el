@@ -633,7 +633,9 @@ With prefix arg FETCH, run `straight-fetch-all' before displaying."
       (unless (derived-mode-p 'straight-overview-mode)
         (straight-overview-mode))
       (straight-overview-refresh))
-    (pop-to-buffer buf)))
+    ;; Same window by default, but route through `display-buffer' so users can
+    ;; redirect placement via `display-buffer-alist' keyed on "*straight-overview*".
+    (pop-to-buffer-same-window buf)))
 
 (provide 'straight-overview)
 ;;; straight-overview.el ends here
