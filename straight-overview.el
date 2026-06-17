@@ -56,6 +56,8 @@
 (require 'subr-x)
 (require 'tabulated-list)
 (require 'straight)
+;; For the `dired-mark' / `dired-marked' faces that the mark styling inherits.
+(require 'dired)
 
 ;; Optional integration: `straight-overview-changelog' uses Magit when it is
 ;; available, but Magit is not a hard dependency.
@@ -100,6 +102,17 @@ restart (the merge registers a repo modification)."
   '((t :inherit warning))
   "Face for the behind-upstream indicator.")
 
+(defface straight-overview-mark
+  '((t :inherit dired-mark))
+  "Face for the mark character on marked rows.
+Inherits from Dired's `dired-mark' so it tracks the active theme.")
+
+(defface straight-overview-marked
+  '((t :inherit dired-marked))
+  "Face for marked package rows.
+Inherits from Dired's `dired-marked' so marked rows pick up the same
+styling Dired uses for marked files under the active theme.")
+
 (defvar-local straight-overview--records nil
   "Cached list of per-package status plists for the current buffer.")
 (defvar-local straight-overview--marks nil
@@ -111,6 +124,9 @@ restart (the merge registers a repo modification)."
   "Magit log buffers opened by `straight-overview-changelog'.
 Used to reuse an already-visible changelog window instead of
 popping a new one for each package.")
+
+(defvar-local straight-overview--mark-overlays nil
+  "Overlays highlighting the currently marked rows.")
 
 ;;; Git plumbing
 
@@ -206,13 +222,22 @@ popping a new one for each package.")
            straight-overview--records))))
 
 (defun straight-overview--redraw-marks ()
-  "Re-apply the mark column from `straight-overview--marks'."
+  "Re-apply the mark column and row highlight from `straight-overview--marks'."
+  (mapc #'delete-overlay straight-overview--mark-overlays)
+  (setq straight-overview--mark-overlays nil)
   (save-excursion
     (goto-char (point-min))
     (while (not (eobp))
-      (let ((id (tabulated-list-get-id)))
+      (let ((marked (let ((id (tabulated-list-get-id)))
+                      (and id (gethash id straight-overview--marks)))))
         (tabulated-list-put-tag
-         (if (and id (gethash id straight-overview--marks)) "*" " ")))
+         (if marked (propertize "*" 'face 'straight-overview-mark) " "))
+        (when marked
+          (let ((ov (make-overlay (line-beginning-position)
+                                  (min (point-max) (1+ (line-end-position))))))
+            (overlay-put ov 'face 'straight-overview-marked)
+            (overlay-put ov 'straight-overview-mark t)
+            (push ov straight-overview--mark-overlays))))
       (forward-line 1))))
 
 (defun straight-overview--render ()
@@ -253,17 +278,17 @@ popping a new one for each package.")
   "Mark the package at point for update and move to the next line."
   (interactive)
   (let ((id (tabulated-list-get-id)))
-    (when id
-      (puthash id t straight-overview--marks)
-      (tabulated-list-put-tag "*" t))))
+    (when id (puthash id t straight-overview--marks)))
+  (straight-overview--redraw-marks)
+  (forward-line 1))
 
 (defun straight-overview-unmark ()
   "Unmark the package at point and move to the next line."
   (interactive)
   (let ((id (tabulated-list-get-id)))
-    (when id
-      (remhash id straight-overview--marks)
-      (tabulated-list-put-tag " " t))))
+    (when id (remhash id straight-overview--marks)))
+  (straight-overview--redraw-marks)
+  (forward-line 1))
 
 (defun straight-overview-unmark-all ()
   "Remove all marks."
