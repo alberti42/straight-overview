@@ -208,9 +208,11 @@ for pin state across the session.")
       (error nil))))
 
 (defun straight-overview--duration (seconds)
-  "Format SECONDS as a compact age like \"1y209d\", \"27d\" or \"5h\"."
+  "Format SECONDS as a compact age like \"1y209d\", \"27d\" or \"5h\".
+Non-positive SECONDS (the upstream tip is not newer than HEAD, e.g. on a
+fork whose HEAD commit post-dates the tracked tip) render as \"<1d\"."
   (let ((d (/ seconds 86400)))
-    (cond ((<= seconds 0) "")
+    (cond ((<= seconds 0) "<1d")
           ((>= d 365) (format "%dy%dd" (/ d 365) (% d 365)))
           ((>= d 1) (format "%dd" d))
           (t (format "%dh" (max 1 (/ seconds 3600)))))))
