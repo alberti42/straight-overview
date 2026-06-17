@@ -225,15 +225,19 @@ for pin state across the session.")
              (branch (or (plist-get recipe :branch)
                          (straight-overview--git dir "symbolic-ref" "--short" "HEAD")))
              (upstream (and branch (format "%s/%s" remote branch)))
-             (installed (or (straight-overview--git dir "rev-parse" "--short" "HEAD") "?"))
-             (commit (straight-overview--git dir "rev-parse" "HEAD"))
+             ;; One call gets HEAD's full hash and committer timestamp; the
+             ;; short hash is just a prefix, no extra `rev-parse'.
+             (head (straight-overview--git dir "log" "-1" "--format=%H%x09%ct" "HEAD"))
+             (head-parts (and head (split-string head "\t")))
+             (commit (car head-parts))
+             (head-ts (cadr head-parts))
+             (installed (if commit (substring commit 0 (min 8 (length commit))) "?"))
              (tag (or (straight-overview--git dir "describe" "--tags" "--abbrev=0") ""))
              (url (straight-overview--url recipe))
              (count-str (and upstream
                              (straight-overview--git dir "rev-list" "--count"
                                                      (format "HEAD..%s" upstream))))
              (commits (and count-str (string-to-number count-str)))
-             (head-ts (and upstream (straight-overview--git dir "log" "-1" "--format=%ct" "HEAD")))
              (up-ts (and upstream (straight-overview--git dir "log" "-1" "--format=%ct" upstream)))
              (behind-secs (and head-ts up-ts
                                (- (string-to-number up-ts) (string-to-number head-ts))))
