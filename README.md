@@ -141,4 +141,6 @@ explored this space first:
 
 ## License
 
-[Mozilla Public License 2.0](LICENSE).
+[GNU General Public License v3.0 or later](LICENSE).
+
+Copyright (C) 2025-2026 Andrea Alberti.
