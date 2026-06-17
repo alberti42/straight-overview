@@ -80,6 +80,15 @@ nil opens instantly from local refs (press G to fetch later)."
                  (const :tag "All" all))
   :group 'straight-overview)
 
+(defcustom straight-overview-changelog-use-magit t
+  "Whether `straight-overview-changelog' uses Magit when it is available.
+When non-nil (the default) and Magit is loaded, the changelog opens in a
+`magit-log' buffer so each commit is actionable.  When nil, always use
+the plain `git log' listing even if Magit is installed (useful for
+debugging the built-in path)."
+  :type 'boolean
+  :group 'straight-overview)
+
 (defcustom straight-overview-build-on-pull nil
   "When non-nil, also rebuild each package immediately after pulling.
 When nil, straight rebuilds the modified repos on the next Emacs
@@ -359,7 +368,7 @@ actionable (RET to inspect it, etc.); otherwise fall back to a plain
         (cond
          ((not (and (plist-get rec :commits) (> (plist-get rec :commits) 0)))
           (message "%s: up to date" name))
-         ((require 'magit nil t)
+         ((and straight-overview-changelog-use-magit (require 'magit nil t))
           (let* ((default-directory (file-name-as-directory dir))
                  (magit-display-buffer-function #'straight-overview--display-log)
                  (buf (magit-log-setup-buffer (list range) (list "-n256" "--decorate") nil)))
