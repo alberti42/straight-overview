@@ -21,6 +21,20 @@ The **Behind** column shows `(<commits>; <time>)` — how many commits and how
 much wall-clock time your installed checkout is behind the tracked upstream
 branch. By default only outdated packages are listed.
 
+## Motivation
+
+straight.el is a wonderful package manager, but its upgrade story is
+coarse-grained: `straight-pull-all` updates *everything* at once. If you only
+want the latest Magit but would rather not move thirty other packages on the
+same day, you have to fall back to upgrading them one by one by name — with no
+overview of what actually has updates waiting, or how far behind you are.
+
+`straight-overview` fills that gap. It gives you a single, at-a-glance buffer
+of exactly which packages are behind upstream and by how much, and lets you
+upgrade (or deliberately hold) just the ones you choose — without leaving
+Emacs, and without adopting a different package manager. Everything is built on
+top of straight's own data and commands; it adds a UI, not a new model.
+
 ## Design
 
 - **Opens instantly.** The list is built from *local* git refs — no network
@@ -103,6 +117,27 @@ header, etc.).
   runs `git reset --hard` to the pinned commit, so any uncommitted local changes
   in that repo are discarded (straight clones are normally pristine). It asks for
   confirmation first.
+
+## Related packages and acknowledgements
+
+`straight-overview` was directly inspired by a Reddit discussion about wanting
+targeted, informed package upgrades. Credit and thanks to the projects that
+explored this space first:
+
+- **[subtree-package](https://github.com/djr7C4/subtree-package)** by David J.
+  Rosenbaum — the immediate inspiration. Its package list, which highlights
+  upgradable packages and shows how far each is behind upstream as
+  `(<commits behind>; <time behind>)`, is exactly where this package's **Behind**
+  column comes from. subtree-package takes a more ambitious approach (it manages
+  packages as git subtrees vendored into your own repository); `straight-overview`
+  borrows the presentation but stays a thin UI over straight.el.
+- **[straight.el](https://github.com/radian-software/straight.el)** by
+  Radian LLC — the package manager this is built on. All the heavy lifting
+  (`straight-fetch-all`, `straight-pull-package`, `straight-rebuild-package`,
+  the version lockfiles) is straight's; this package only adds an interface.
+- **package.el's `list-packages`** (built into Emacs) and **Dired** — the
+  dired-style marking idiom (`m`/`u`/`U`, mark-then-execute) that the upgrade and
+  pin workflow follows.
 
 ## License
 
