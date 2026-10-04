@@ -50,6 +50,8 @@ top of straight's own data and commands; it adds a UI, not a new model.
 - **Fetch is explicit and decoupled.** Press <kbd>G</kbd> to run
   `straight-fetch-all` and refresh against live remotes. You decide when to
   pay the network cost, not the act of opening the list.
+  A banner above the table gives the number of packages behind the remote
+  as of the last fetch and reminds you to press <kbd>G</kbd>.
 - **Selective, dired-style upgrades.** Mark the packages you want, then
   execute. No more updating 100 packages to get the one you cared about.
 - **Pinning (holds).** Pin a package to *hold* it: it stays visible (faded, with

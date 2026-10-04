@@ -171,6 +171,8 @@ popping a new one for each package.")
 (defvar-local straight-overview--mark-overlays nil
   "Overlays highlighting the currently marked rows.")
 
+(defvar-local straight-overview--banner nil
+  "Overlay showing the status banner above the first row.")
 
 (defvar straight-overview--pins nil
   "Alist of (PACKAGE-NAME . COMMIT) for pinned packages.
@@ -509,11 +511,34 @@ package, then the fallback calls that the first round shows are needed."
             (push ov straight-overview--mark-overlays))))
       (forward-line 1))))
 
+(defun straight-overview--banner-text ()
+  "Return the banner: how many packages are behind, and the keys to press."
+  (let ((n (cl-count-if (lambda (r) (plist-get r :outdated))
+                        straight-overview--records)))
+    (concat
+     (format "%d %s behind the remote as of the last fetch.  "
+             n (if (= n 1) "package is" "packages are"))
+     (substitute-command-keys
+      (format "Press \\[straight-overview-fetch] to fetch new commits, \
+\\[straight-overview-toggle-show] to show %s packages.\n\n"
+              (if (eq straight-overview--show 'all) "only outdated" "all"))))))
+
+(defun straight-overview--draw-banner ()
+  "Show the banner above the first row.
+The banner is an overlay's `before-string', so it is not buffer text:
+it survives `tabulated-list-print' and never carries a row id."
+  (unless straight-overview--banner
+    (setq straight-overview--banner (make-overlay (point-min) (point-min))))
+  (move-overlay straight-overview--banner (point-min) (point-min))
+  (overlay-put straight-overview--banner 'before-string
+               (straight-overview--banner-text)))
+
 (defun straight-overview--render ()
   "Repaint the list from cached records, preserving marks."
   (setq tabulated-list-entries (straight-overview--entries))
   (tabulated-list-print t)
-  (straight-overview--redraw-marks))
+  (straight-overview--redraw-marks)
+  (straight-overview--draw-banner))
 
 (defun straight-overview-refresh ()
   "Recompute package status from local git refs (no fetch)."
