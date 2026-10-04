@@ -61,6 +61,8 @@ top of straight's own data and commands; it adds a UI, not a new model.
   runs, it shows the progress; afterwards, it lists the packages whose fetch
   failed, timed out, or needed credentials.
 
+  ![Pressing G starts the fetch while text is typed in another buffer](screenshot-fetch.gif)
+
 - **Selective, dired-style upgrades.** Mark the packages you want, then
   execute. No more updating 100 packages to get the one you cared about.
 - **Pinning (holds).** Pin a package to *hold* it: it stays visible (faded, with
