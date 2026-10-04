@@ -57,7 +57,7 @@ top of straight's own data and commands; it adds a UI, not a new model.
   A banner above the table gives the number of packages behind the remote
   as of the last fetch and reminds you to press <kbd>G</kbd>. While a fetch
   runs, it shows the progress; afterwards, it lists the packages whose fetch
-  failed or timed out.
+  failed, timed out, or needed credentials.
 - **Selective, dired-style upgrades.** Mark the packages you want, then
   execute. No more updating 100 packages to get the one you cared about.
 - **Pinning (holds).** Pin a package to *hold* it: it stays visible (faded, with
@@ -143,8 +143,18 @@ side window at the bottom:
   progress, the checked-out branch) and asks how to proceed when one fails.
   A fetch only updates remote refs, so those checks are not needed for it.
   Pulling with <kbd>x</kbd> still goes through `straight-pull-package` and its
-  checks. Git runs without a terminal, so a remote that asks for a password
-  fails instead of waiting.
+  checks.
+- **Credentials are asked for at the end, one repository at a time.** The
+  parallel fetches cannot prompt: a remote that asks for a username,
+  password or passphrase fails instead of waiting. Git runs in the C locale,
+  so the package recognizes these failures from git's untranslated messages.
+  When the last fetch ends and `straight-display-subprocess-prompts` is
+  non-nil (the straight option that lets git ask you for credentials), the
+  package asks whether to enter them, then fetches those repositories again
+  one after another, reading each prompt in the minibuffer. When the option
+  is nil (straight's default), the banner lists those repositories instead.
+  Credentials stored in a git credential helper, such as the macOS keychain,
+  are used without any prompt.
 - **Shallow clones.** Commit counts and changelogs assume full clones
   (straight's default — `straight-vc-git-default-clone-depth` = `full`). If a
   package was cloned shallow, those figures may be truncated.

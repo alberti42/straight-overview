@@ -200,8 +200,10 @@ for pin state across the session.")
   "The pool of the fetch running in the background, or nil.")
 
 (defvar straight-overview--fetch-problems nil
-  "Packages whose last fetch had a problem, as (FAILED . TIMED-OUT).
-Each is a list of package names.")
+  "Packages whose last fetch did not succeed.
+A plist with keys :failed, :timed-out and :credentials, each a list of
+package names.  Between the end of the fetch and the credentials round,
+:credentials holds `straight-overview--repo' structs.")
 
 (defvar straight-overview--ahead-behind 'unknown
   "Whether git supports the `ahead-behind' format atom (git 2.41+).
@@ -248,10 +250,12 @@ The symbol `unknown' until `straight-overview--ahead-behind-p' checks.")
                (:constructor straight-overview--make-pool)
                (:copier nil))
   "Git calls run in parallel by `straight-overview--pool-start'.
-RESULTS holds one entry per job, in job order.  PENDING counts the jobs
+RESULTS holds one entry per job, in job order; ERRORS holds the output
+of the jobs that failed.  PENDING counts the jobs
 not yet finished.  TIMED-OUT lists the indices of jobs stopped after
 TIMEOUT seconds.  ENV is the `process-environment' the jobs run with."
-  queue results pending procs width timeout env timed-out on-progress on-done)
+  queue results errors pending procs width timeout env timed-out
+  on-progress on-done)
 
 (cl-defun straight-overview--pool-start (jobs &key width timeout on-progress on-done)
   "Start the git calls JOBS in parallel and return the pool.
@@ -265,6 +269,7 @@ of the pool's `results' is trimmed stdout, or nil on failure, as from
   (let ((pool (straight-overview--make-pool
                :queue (seq-map-indexed (lambda (job i) (cons i job)) jobs)
                :results (make-vector (length jobs) nil)
+               :errors (make-vector (length jobs) nil)
                :pending (length jobs)
                :width (max 1 (or width straight-overview-jobs (num-processors)))
                :timeout timeout :env process-environment
@@ -326,7 +331,10 @@ of the pool's `results' is trimmed stdout, or nil on failure, as from
                       (eq 0 (process-exit-status proc)))
                  (aset (straight-overview--pool-results pool) i
                        (with-current-buffer buf
-                         (string-trim (buffer-string)))))))
+                         (string-trim (buffer-string)))))
+                (t
+                 (aset (straight-overview--pool-errors pool) i
+                       (with-current-buffer buf (buffer-string))))))
       (kill-buffer buf)
       (setf (straight-overview--pool-procs pool)
             (delq proc (straight-overview--pool-procs pool)))
@@ -611,8 +619,9 @@ package, then the fallback calls that the first round shows are needed."
   "Return the banner: packages behind, fetch state, and the keys to press."
   (let ((n (cl-count-if (lambda (r) (plist-get r :outdated))
                         straight-overview--records))
-        (failed (car straight-overview--fetch-problems))
-        (timed-out (cdr straight-overview--fetch-problems))
+        (failed (plist-get straight-overview--fetch-problems :failed))
+        (timed-out (plist-get straight-overview--fetch-problems :timed-out))
+        (credentials (plist-get straight-overview--fetch-problems :credentials))
         (all (if (eq straight-overview--show 'all) "only outdated" "all")))
     (concat
      (format "%d %s behind the remote as of the last fetch.\n"
@@ -631,6 +640,12 @@ package, then the fallback calls that the first round shows are needed."
        (format "Last fetch failed for: %s.\n" (string-join failed ", ")))
      (when timed-out
        (format "Last fetch timed out for: %s.\n" (string-join timed-out ", ")))
+     (when (and credentials (stringp (car credentials)))
+       (format "Last fetch needed credentials for: %s.%s\n"
+               (string-join credentials ", ")
+               (if (bound-and-true-p straight-display-subprocess-prompts)
+                   ""
+                 "  Set `straight-display-subprocess-prompts' to enter them.")))
      "\n")))
 
 (defun straight-overview--draw-banner ()
@@ -670,6 +685,13 @@ it survives `tabulated-list-print' and never carries a row id."
            (cl-count-if (lambda (r) (plist-get r :outdated))
                         straight-overview--records)))
 
+(defconst straight-overview--credentials-regexp
+  (regexp-opt '("could not read Username" "could not read Password"
+                "terminal prompts disabled" "Permission denied (publickey"
+                "Host key verification failed"))
+  "Matches git's and ssh's error output when a fetch needed credentials.
+Fetches run in the C locale, so these messages are not translated.")
+
 (defun straight-overview--fetch-start ()
   "Start `git fetch REMOTE' in every straight repository, in the background.
 Each repository is fetched once, also when several packages share it.
@@ -682,8 +704,10 @@ updates remote refs.  When the last fetch ends, the overview refreshes."
                  (lambda (a b)
                    (equal (straight-overview--repo-dir a)
                           (straight-overview--repo-dir b)))))
-         ;; No terminal can answer a credential prompt: fail instead of wait.
-         (process-environment (cons "GIT_TERMINAL_PROMPT=0" process-environment))
+         ;; No terminal can answer a credential prompt: fail instead of
+         ;; wait.  The C locale keeps the error messages untranslated.
+         (process-environment (append '("GIT_TERMINAL_PROMPT=0" "LC_ALL=C")
+                                      process-environment))
          (pool (straight-overview--pool-start
                 (mapcar (lambda (repo)
                           (list (straight-overview--repo-dir repo)
@@ -701,35 +725,114 @@ updates remote refs.  When the last fetch ends, the overview refreshes."
              (length repos))))
 
 (defun straight-overview--fetch-done (repos pool)
-  "Record which fetches of POOL failed or timed out, then refresh.
+  "Sort the fetches of POOL that did not succeed, then refresh.
 REPOS are the repositories POOL fetched, in job order."
   (setq straight-overview--fetch nil
         straight-overview--fetch-problems
         (cl-loop for repo in repos
                  for out across (straight-overview--pool-results pool)
+                 for err across (straight-overview--pool-errors pool)
                  for i from 0
-                 for name = (straight-overview--repo-name repo)
                  if (memq i (straight-overview--pool-timed-out pool))
-                 collect name into timed-out
-                 else if (null out) collect name into failed
-                 finally return (cons failed timed-out)))
+                 collect (straight-overview--repo-name repo) into timed-out
+                 else if (and (null out) err
+                              (string-match-p straight-overview--credentials-regexp
+                                              err))
+                 collect repo into credentials
+                 else if (null out)
+                 collect (straight-overview--repo-name repo) into failed
+                 finally return (list :failed failed :timed-out timed-out
+                                      :credentials credentials)))
   ;; From a sentinel, a refresh could start inside another command's scan;
   ;; an idle timer waits until Emacs waits for input.
   (run-with-idle-timer 0 nil #'straight-overview--after-fetch))
 
+(defun straight-overview--prompt-filter (proc string)
+  "Insert STRING into PROC's buffer and answer the prompt it ends with.
+Username and password prompts are read in the minibuffer, as are ssh's
+yes/no questions.  Git and ssh run in the C locale, so their prompts
+are in English."
+  (with-current-buffer (process-buffer proc)
+    (goto-char (point-max))
+    (insert string)
+    (let ((line (buffer-substring-no-properties (line-beginning-position) (point)))
+          (case-fold-search t)
+          (inhibit-quit nil))
+      (condition-case nil
+          (cond
+           ((string-match-p "username for .*: *\\'" line)
+            (insert "\n")
+            (process-send-string proc (concat (read-string line) "\n")))
+           ((string-match-p "\\(password\\|passphrase\\).*: *\\'" line)
+            (insert "\n")
+            (let ((password (read-passwd line)))
+              (process-send-string proc (concat password "\n"))
+              (clear-string password)))
+           ((string-match-p "(yes/no[^)]*)\\? *\\'" line)
+            (insert "\n")
+            (process-send-string proc (if (yes-or-no-p line) "yes\n" "no\n"))))
+        (quit (delete-process proc))))))
+
+(defun straight-overview--fetch-with-prompts (repo)
+  "Fetch REPO on a pty, answering its prompts in the minibuffer.
+Return non-nil if the fetch succeeded."
+  (let* ((default-directory (file-name-as-directory
+                             (straight-overview--repo-dir repo)))
+         (process-environment (cons "LC_ALL=C" process-environment))
+         (buf (generate-new-buffer " *straight-overview-fetch*" t))
+         (proc (make-process
+                :name "straight-overview-fetch"
+                :buffer buf
+                :command (list "git" "fetch" "--quiet"
+                               (straight-overview--repo-remote repo))
+                :connection-type 'pty
+                :noquery t
+                :filter #'straight-overview--prompt-filter
+                :sentinel #'ignore)))
+    (unwind-protect
+        (progn
+          (while (process-live-p proc)
+            (accept-process-output proc 0.1))
+          (and (eq (process-status proc) 'exit)
+               (eq 0 (process-exit-status proc))))
+      (when (process-live-p proc)
+        (delete-process proc))
+      (kill-buffer buf))))
+
 (defun straight-overview--after-fetch ()
-  "Refresh the overview after a fetch and report the outcome."
-  (let ((buf (get-buffer "*straight-overview*")))
-    (when buf
-      (with-current-buffer buf
-        (straight-overview-refresh))))
-  (let ((failed (car straight-overview--fetch-problems))
-        (timed-out (cdr straight-overview--fetch-problems)))
-    (message "straight-overview: fetch done%s"
-             (if (or failed timed-out)
-                 (format "; %d failed, %d timed out (listed in the overview)"
-                         (length failed) (length timed-out))
-               ""))))
+  "Ask for the credentials the fetch needed, refresh, and report the outcome.
+The credentials round runs only when `straight-display-subprocess-prompts'
+is non-nil, the option with which straight itself asks for credentials.
+The fetches that need credentials then run again one at a time, so their
+prompts come one after the other."
+  (if (active-minibuffer-window)
+      ;; Do not interrupt a minibuffer read; ask once it is done.
+      (run-with-idle-timer 1 nil #'straight-overview--after-fetch)
+    (let ((credentials (plist-get straight-overview--fetch-problems :credentials)))
+      ;; Structs until this round has run; package names afterwards.
+      (when (straight-overview--repo-p (car credentials))
+        (when (and (bound-and-true-p straight-display-subprocess-prompts)
+                   (y-or-n-p
+                    (format "%d %s credentials (%s).  Enter them now? "
+                            (length credentials)
+                            (if (= (length credentials) 1) "fetch needs" "fetches need")
+                            (mapconcat #'straight-overview--repo-name credentials ", "))))
+          (setq credentials
+                (seq-remove #'straight-overview--fetch-with-prompts credentials)))
+        (setq straight-overview--fetch-problems
+              (plist-put straight-overview--fetch-problems :credentials
+                         (mapcar #'straight-overview--repo-name credentials)))))
+    (let ((buf (get-buffer "*straight-overview*")))
+      (when buf
+        (with-current-buffer buf
+          (straight-overview-refresh))))
+    (let ((n (+ (length (plist-get straight-overview--fetch-problems :failed))
+                (length (plist-get straight-overview--fetch-problems :timed-out))
+                (length (plist-get straight-overview--fetch-problems :credentials)))))
+      (message "straight-overview: fetch done%s"
+               (if (> n 0)
+                   (format "; %d did not succeed (listed in the overview)" n)
+                 "")))))
 
 (defun straight-overview-fetch ()
   "Fetch every package's remote in the background, then refresh.
