@@ -43,8 +43,8 @@
 ;;
 ;; The list is built from local git refs (no network), running git for all
 ;; packages in parallel.  The displayed "behind" figures reflect the last
-;; time each remote was fetched; press `G' to run `straight-fetch-all' and
-;; refresh against live remotes.
+;; time each remote was fetched; press `G' to fetch all remotes in parallel
+;; and refresh.
 ;;
 ;; Packages are marked dired-style and acted on in a batch:
 ;;
@@ -53,7 +53,7 @@
 ;;   U   unmark all               o / RET  open repo in browser
 ;;   M   mark all outdated        a   toggle outdated-only / all
 ;;   g   re-scan (local, no fetch)
-;;   G   straight-fetch-all, then re-scan
+;;   G   fetch all remotes in the background, then re-scan
 ;;
 ;; Packages can also be pinned (held), which marks them in the Pin column,
 ;; fades the row, and makes them un-markable:
@@ -91,11 +91,12 @@
   :group 'straight)
 
 (defcustom straight-overview-fetch-on-open nil
-  "Whether to run `straight-fetch-all' when opening the overview.
-nil opens from local refs without fetching (press G to fetch later)."
+  "Whether to fetch all remotes when opening the overview.
+The fetch runs in the background; the overview opens from local refs
+and refreshes when the fetch ends.  nil does not fetch (press G later)."
   :type '(choice (const :tag "Never (open from local refs; refresh with G)" nil)
                  (const :tag "Ask each time" ask)
-                 (const :tag "Always fetch first" t))
+                 (const :tag "Always fetch" t))
   :group 'straight-overview)
 
 (defcustom straight-overview-show 'outdated
@@ -122,10 +123,24 @@ Also governs whether `straight-overview-restore' rebuilds in-session."
   :group 'straight-overview)
 
 (defcustom straight-overview-jobs nil
-  "Maximum number of git processes to run at once while scanning.
+  "Maximum number of git processes to run at once while scanning local refs.
 nil uses the number of processors (`num-processors')."
   :type '(choice (const :tag "Number of processors" nil)
                  (natnum :tag "Processes"))
+  :group 'straight-overview)
+
+(defcustom straight-overview-fetch-jobs 16
+  "Maximum number of `git fetch' processes to run at once.
+A fetch mostly waits on its server, so more fetches than processors
+still pay off."
+  :type 'natnum
+  :group 'straight-overview)
+
+(defcustom straight-overview-fetch-timeout 30
+  "Seconds after which a single repository's fetch is stopped.
+A stopped fetch is reported as timed out.  nil means no limit."
+  :type '(choice (const :tag "No limit" nil)
+                 (number :tag "Seconds"))
   :group 'straight-overview)
 
 (defcustom straight-overview-pinned-file nil
@@ -181,6 +196,13 @@ for pin state across the session.")
 (defvar straight-overview--pins-loaded nil
   "Non-nil once `straight-overview--pins' has been read from disk.")
 
+(defvar straight-overview--fetch nil
+  "The pool of the fetch running in the background, or nil.")
+
+(defvar straight-overview--fetch-problems nil
+  "Packages whose last fetch had a problem, as (FAILED . TIMED-OUT).
+Each is a list of package names.")
+
 (defvar straight-overview--ahead-behind 'unknown
   "Whether git supports the `ahead-behind' format atom (git 2.41+).
 The symbol `unknown' until `straight-overview--ahead-behind-p' checks.")
@@ -222,61 +244,129 @@ The symbol `unknown' until `straight-overview--ahead-behind-p' checks.")
               (string-trim (buffer-string)))))
       (error nil))))
 
+(cl-defstruct (straight-overview--pool
+               (:constructor straight-overview--make-pool)
+               (:copier nil))
+  "Git calls run in parallel by `straight-overview--pool-start'.
+RESULTS holds one entry per job, in job order.  PENDING counts the jobs
+not yet finished.  TIMED-OUT lists the indices of jobs stopped after
+TIMEOUT seconds.  ENV is the `process-environment' the jobs run with."
+  queue results pending procs width timeout env timed-out on-progress on-done)
+
+(cl-defun straight-overview--pool-start (jobs &key width timeout on-progress on-done)
+  "Start the git calls JOBS in parallel and return the pool.
+Each job is (DIR . ARGS).  At most WIDTH processes run at once (default
+`straight-overview-jobs'); a finished process hands its slot to the next
+job in the queue.  A process still running after TIMEOUT seconds is stopped and
+its job index added to the pool's `timed-out'.  ON-PROGRESS is called
+with the pool after each job, ON-DONE once after the last.  Each entry
+of the pool's `results' is trimmed stdout, or nil on failure, as from
+`straight-overview--git'."
+  (let ((pool (straight-overview--make-pool
+               :queue (seq-map-indexed (lambda (job i) (cons i job)) jobs)
+               :results (make-vector (length jobs) nil)
+               :pending (length jobs)
+               :width (max 1 (or width straight-overview-jobs (num-processors)))
+               :timeout timeout :env process-environment
+               :on-progress on-progress :on-done on-done)))
+    (if (zerop (length jobs))
+        (when on-done (funcall on-done pool))
+      (straight-overview--pool-fill pool))
+    pool))
+
+(defun straight-overview--pool-fill (pool)
+  "Start queued jobs of POOL until its width is reached."
+  (while (and (straight-overview--pool-queue pool)
+              (< (length (straight-overview--pool-procs pool))
+                 (straight-overview--pool-width pool)))
+    (pcase-let ((`(,i ,dir . ,args) (pop (straight-overview--pool-queue pool))))
+      (let ((buf (generate-new-buffer " *straight-overview-git*" t)))
+        (condition-case nil
+            (let* ((default-directory (file-name-as-directory dir))
+                   (process-environment (straight-overview--pool-env pool))
+                   (proc (make-process
+                          :name "straight-overview-git"
+                          :buffer buf
+                          :command (cons "git" args)
+                          :connection-type 'pipe
+                          :noquery t
+                          :sentinel (lambda (p _event)
+                                      (unless (process-live-p p)
+                                        (straight-overview--pool-finish pool p)))))
+                   (timeout (straight-overview--pool-timeout pool)))
+              (process-put proc 'index i)
+              (when timeout
+                (process-put proc 'timer
+                             (run-at-time timeout nil
+                                          #'straight-overview--pool-time-out
+                                          pool proc)))
+              (push proc (straight-overview--pool-procs pool)))
+          (error (kill-buffer buf)
+                 (straight-overview--pool-job-done pool)))))))
+
+(defun straight-overview--pool-time-out (pool proc)
+  "Stop PROC, a process of POOL that ran past the pool's timeout."
+  (when (process-live-p proc)
+    (process-put proc 'timed-out t)
+    (set-process-sentinel proc #'ignore)
+    (delete-process proc)
+    (straight-overview--pool-finish pool proc)))
+
+(defun straight-overview--pool-finish (pool proc)
+  "Record the result of PROC, a finished process of POOL, and start the next job."
+  (let ((buf (process-buffer proc))
+        (i (process-get proc 'index))
+        (timer (process-get proc 'timer)))
+    (unwind-protect
+        (progn
+          (when timer (cancel-timer timer))
+          (cond ((process-get proc 'timed-out)
+                 (push i (straight-overview--pool-timed-out pool)))
+                ((and (eq (process-status proc) 'exit)
+                      (eq 0 (process-exit-status proc)))
+                 (aset (straight-overview--pool-results pool) i
+                       (with-current-buffer buf
+                         (string-trim (buffer-string)))))))
+      (kill-buffer buf)
+      (setf (straight-overview--pool-procs pool)
+            (delq proc (straight-overview--pool-procs pool)))
+      (straight-overview--pool-job-done pool)
+      (straight-overview--pool-fill pool))))
+
+(defun straight-overview--pool-job-done (pool)
+  "Count one job of POOL as finished and run its callbacks."
+  (cl-decf (straight-overview--pool-pending pool))
+  (let ((on-progress (straight-overview--pool-on-progress pool))
+        (on-done (straight-overview--pool-on-done pool)))
+    (when on-progress (funcall on-progress pool))
+    (when (and on-done (zerop (straight-overview--pool-pending pool)))
+      (funcall on-done pool))))
+
+(defun straight-overview--pool-cancel (pool)
+  "Stop POOL: drop its queued jobs and delete its running processes.
+Neither callback of POOL runs afterwards."
+  (setf (straight-overview--pool-queue pool) nil
+        (straight-overview--pool-on-progress pool) nil
+        (straight-overview--pool-on-done pool) nil)
+  (dolist (proc (straight-overview--pool-procs pool))
+    (let ((timer (process-get proc 'timer)))
+      (when timer (cancel-timer timer)))
+    (set-process-sentinel proc #'ignore)
+    (delete-process proc)
+    (kill-buffer (process-buffer proc)))
+  (setf (straight-overview--pool-procs pool) nil))
+
 (defun straight-overview--git-batch (jobs)
-  "Run the git calls JOBS in parallel; return their results in order.
-Each job is (DIR . ARGS).  Each result is trimmed stdout, or nil on
-failure, as from `straight-overview--git'.  At most
-`straight-overview-jobs' processes run at once; a finished process
-hands its slot to the next job in the queue."
-  (let* ((width (max 1 (or straight-overview-jobs (num-processors))))
-         (results (make-vector (length jobs) nil))
-         (queue (seq-map-indexed (lambda (job i) (cons i job)) jobs))
-         (pending (length jobs))
-         procs)
-    (cl-labels
-        ((finish (proc)
-           (let ((buf (process-buffer proc)))
-             (unwind-protect
-                 (when (and (eq (process-status proc) 'exit)
-                            (eq 0 (process-exit-status proc)))
-                   (aset results (process-get proc 'index)
-                         (with-current-buffer buf
-                           (string-trim (buffer-string)))))
-               (kill-buffer buf)
-               (setq procs (delq proc procs))
-               (cl-decf pending)
-               (start))))
-         (start ()
-           (while (and queue (< (length procs) width))
-             (pcase-let ((`(,i ,dir . ,args) (pop queue)))
-               (let ((buf (generate-new-buffer " *straight-overview-git*" t)))
-                 (condition-case nil
-                     (let* ((default-directory (file-name-as-directory dir))
-                            (proc (make-process
-                                   :name "straight-overview-git"
-                                   :buffer buf
-                                   :command (cons "git" args)
-                                   :connection-type 'pipe
-                                   :noquery t
-                                   :sentinel (lambda (p _event)
-                                               (unless (process-live-p p)
-                                                 (finish p))))))
-                       (process-put proc 'index i)
-                       (push proc procs))
-                   (error (kill-buffer buf)
-                          (cl-decf pending))))))))
-      (unwind-protect
-          (progn
-            (start)
-            (while (> pending 0)
-              (accept-process-output nil 0.05)))
-        ;; Reached early only on a quit: stop the processes still running.
-        (setq queue nil)
-        (dolist (proc procs)
-          (set-process-sentinel proc #'ignore)
-          (delete-process proc)
-          (kill-buffer (process-buffer proc)))))
-    (append results nil)))
+  "Run the git calls JOBS in parallel, wait, and return their results.
+JOBS and the results are as for `straight-overview--pool-start'; the
+results come back as a list in the order of JOBS."
+  (let ((pool (straight-overview--pool-start jobs)))
+    (unwind-protect
+        (while (> (straight-overview--pool-pending pool) 0)
+          (accept-process-output nil 0.05))
+      ;; Reached early only on a quit: stop the processes still running.
+      (straight-overview--pool-cancel pool))
+    (append (straight-overview--pool-results pool) nil)))
 
 (defun straight-overview--ahead-behind-p (dir)
   "Return non-nil if git supports `%(ahead-behind:...)'; run git in DIR.
@@ -511,17 +601,37 @@ package, then the fallback calls that the first round shows are needed."
             (push ov straight-overview--mark-overlays))))
       (forward-line 1))))
 
+(defun straight-overview--fetch-progress (pool)
+  "Return \"N of M repositories done\" for the fetch POOL."
+  (let ((total (length (straight-overview--pool-results pool))))
+    (format "%d of %d repositories done"
+            (- total (straight-overview--pool-pending pool)) total)))
+
 (defun straight-overview--banner-text ()
-  "Return the banner: how many packages are behind, and the keys to press."
+  "Return the banner: packages behind, fetch state, and the keys to press."
   (let ((n (cl-count-if (lambda (r) (plist-get r :outdated))
-                        straight-overview--records)))
+                        straight-overview--records))
+        (failed (car straight-overview--fetch-problems))
+        (timed-out (cdr straight-overview--fetch-problems))
+        (all (if (eq straight-overview--show 'all) "only outdated" "all")))
     (concat
-     (format "%d %s behind the remote as of the last fetch.  "
+     (format "%d %s behind the remote as of the last fetch.\n"
              n (if (= n 1) "package is" "packages are"))
-     (substitute-command-keys
-      (format "Press \\[straight-overview-fetch] to fetch new commits, \
-\\[straight-overview-toggle-show] to show %s packages.\n\n"
-              (if (eq straight-overview--show 'all) "only outdated" "all"))))))
+     (if straight-overview--fetch
+         (substitute-command-keys
+          (format "Fetching in the background: %s.  \
+\\[straight-overview-fetch] cancels, \\[straight-overview-toggle-show] shows %s packages.\n"
+                  (straight-overview--fetch-progress straight-overview--fetch)
+                  all))
+       (substitute-command-keys
+        (format "Press \\[straight-overview-fetch] to fetch new commits, \
+\\[straight-overview-toggle-show] to show %s packages.\n"
+                all)))
+     (when failed
+       (format "Last fetch failed for: %s.\n" (string-join failed ", ")))
+     (when timed-out
+       (format "Last fetch timed out for: %s.\n" (string-join timed-out ", ")))
+     "\n")))
 
 (defun straight-overview--draw-banner ()
   "Show the banner above the first row.
@@ -532,6 +642,14 @@ it survives `tabulated-list-print' and never carries a row id."
   (move-overlay straight-overview--banner (point-min) (point-min))
   (overlay-put straight-overview--banner 'before-string
                (straight-overview--banner-text)))
+
+(defun straight-overview--update-banner ()
+  "Redraw the banner of the overview buffer, if there is one."
+  (let ((buf (get-buffer "*straight-overview*")))
+    (when buf
+      (with-current-buffer buf
+        (when (derived-mode-p 'straight-overview-mode)
+          (straight-overview--draw-banner))))))
 
 (defun straight-overview--render ()
   "Repaint the list from cached records, preserving marks."
@@ -552,12 +670,81 @@ it survives `tabulated-list-print' and never carries a row id."
            (cl-count-if (lambda (r) (plist-get r :outdated))
                         straight-overview--records)))
 
+(defun straight-overview--fetch-start ()
+  "Start `git fetch REMOTE' in every straight repository, in the background.
+Each repository is fetched once, also when several packages share it.
+Unlike `straight-fetch-all', this skips straight's checks of the local
+repository (remote URLs, worktree, checked-out branch): a fetch only
+updates remote refs.  When the last fetch ends, the overview refreshes."
+  (let* ((repos (seq-uniq
+                 (delq nil (mapcar #'straight-overview--find-repo
+                                   (hash-table-keys straight--recipe-cache)))
+                 (lambda (a b)
+                   (equal (straight-overview--repo-dir a)
+                          (straight-overview--repo-dir b)))))
+         ;; No terminal can answer a credential prompt: fail instead of wait.
+         (process-environment (cons "GIT_TERMINAL_PROMPT=0" process-environment))
+         (pool (straight-overview--pool-start
+                (mapcar (lambda (repo)
+                          (list (straight-overview--repo-dir repo)
+                                "fetch" "--quiet"
+                                (straight-overview--repo-remote repo)))
+                        repos)
+                :width straight-overview-fetch-jobs
+                :timeout straight-overview-fetch-timeout
+                :on-progress (lambda (_pool) (straight-overview--update-banner))
+                :on-done (lambda (pool) (straight-overview--fetch-done repos pool)))))
+    (setq straight-overview--fetch
+          (and (> (straight-overview--pool-pending pool) 0) pool))
+    (straight-overview--update-banner)
+    (message "straight-overview: fetching %d repositories in the background..."
+             (length repos))))
+
+(defun straight-overview--fetch-done (repos pool)
+  "Record which fetches of POOL failed or timed out, then refresh.
+REPOS are the repositories POOL fetched, in job order."
+  (setq straight-overview--fetch nil
+        straight-overview--fetch-problems
+        (cl-loop for repo in repos
+                 for out across (straight-overview--pool-results pool)
+                 for i from 0
+                 for name = (straight-overview--repo-name repo)
+                 if (memq i (straight-overview--pool-timed-out pool))
+                 collect name into timed-out
+                 else if (null out) collect name into failed
+                 finally return (cons failed timed-out)))
+  ;; From a sentinel, a refresh could start inside another command's scan;
+  ;; an idle timer waits until Emacs waits for input.
+  (run-with-idle-timer 0 nil #'straight-overview--after-fetch))
+
+(defun straight-overview--after-fetch ()
+  "Refresh the overview after a fetch and report the outcome."
+  (let ((buf (get-buffer "*straight-overview*")))
+    (when buf
+      (with-current-buffer buf
+        (straight-overview-refresh))))
+  (let ((failed (car straight-overview--fetch-problems))
+        (timed-out (cdr straight-overview--fetch-problems)))
+    (message "straight-overview: fetch done%s"
+             (if (or failed timed-out)
+                 (format "; %d failed, %d timed out (listed in the overview)"
+                         (length failed) (length timed-out))
+               ""))))
+
 (defun straight-overview-fetch ()
-  "Fetch all remotes via `straight-fetch-all', then refresh."
+  "Fetch every package's remote in the background, then refresh.
+The fetches run in parallel and Emacs stays usable meanwhile.  While a
+fetch is running, this command offers to cancel it."
   (interactive)
-  (message "straight-overview: fetching all remotes (this blocks)...")
-  (straight-fetch-all)
-  (straight-overview-refresh))
+  (let ((pool straight-overview--fetch))
+    (if (not pool)
+        (straight-overview--fetch-start)
+      (when (y-or-n-p (format "Fetch running (%s); cancel it? "
+                              (straight-overview--fetch-progress pool)))
+        (straight-overview--pool-cancel pool)
+        (setq straight-overview--fetch nil)
+        (straight-overview--update-banner)
+        (message "straight-overview: fetch cancelled")))))
 
 (defun straight-overview-toggle-show ()
   "Toggle between showing only outdated packages and all packages."
@@ -832,21 +1019,21 @@ actionable (RET to inspect it, etc.); otherwise fall back to a plain
 ;;;###autoload
 (defun straight-overview (&optional fetch)
   "Open an overview of straight.el packages and their upstream status.
-With prefix arg FETCH, run `straight-fetch-all' before displaying."
+With prefix arg FETCH, also start fetching all remotes in the background;
+the overview refreshes when the fetch ends."
   (interactive "P")
   (let ((do-fetch (cond (fetch t)
                         ((eq straight-overview-fetch-on-open t) t)
                         ((eq straight-overview-fetch-on-open 'ask)
-                         (y-or-n-p "Fetch all remotes first? "))
+                         (y-or-n-p "Fetch all remotes? "))
                         (t nil)))
         (buf (get-buffer-create "*straight-overview*")))
-    (when do-fetch
-      (message "straight-overview: fetching all remotes (this blocks)...")
-      (straight-fetch-all))
     (with-current-buffer buf
       (unless (derived-mode-p 'straight-overview-mode)
         (straight-overview-mode))
       (straight-overview-refresh))
+    (when (and do-fetch (not straight-overview--fetch))
+      (straight-overview--fetch-start))
     ;; Same window by default, but route through `display-buffer' so users can
     ;; redirect placement via `display-buffer-alist' keyed on "*straight-overview*".
     (pop-to-buffer-same-window buf)))
