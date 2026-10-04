@@ -631,37 +631,39 @@ filter, also after a column sort that does not go through
             (- total (straight-overview--pool-pending pool)) total)))
 
 (defun straight-overview--banner-text ()
-  "Return the banner: packages behind, fetch state, and the keys to press."
+  "Return the banner: packages behind, the keys to press, and fetch state.
+The third line shows the progress while a fetch runs and is blank
+otherwise, so the table does not move when a fetch starts or ends.  The
+problems of the last fetch are listed only when no fetch is running."
   (let ((n (cl-count-if (lambda (r) (plist-get r :outdated))
                         straight-overview--records))
+        (fetch straight-overview--fetch)
         (failed (plist-get straight-overview--fetch-problems :failed))
         (timed-out (plist-get straight-overview--fetch-problems :timed-out))
-        (credentials (plist-get straight-overview--fetch-problems :credentials))
-        (all (if (eq straight-overview--show 'all) "only outdated" "all")))
+        (credentials (plist-get straight-overview--fetch-problems :credentials)))
     (concat
      (format "%d %s behind the remote as of the last fetch.\n"
              n (if (= n 1) "package is" "packages are"))
-     (if straight-overview--fetch
-         (substitute-command-keys
-          (format "Fetching in the background: %s.  \
-\\[straight-overview-fetch] cancels, \\[straight-overview-toggle-show] shows %s packages.\n"
-                  (straight-overview--fetch-progress straight-overview--fetch)
-                  all))
-       (substitute-command-keys
-        (format "Press \\[straight-overview-fetch] to fetch new commits, \
+     (substitute-command-keys
+      (format "Press \\[straight-overview-fetch] to %s, \
 \\[straight-overview-toggle-show] to show %s packages.\n"
-                all)))
-     (when failed
-       (format "Last fetch failed for: %s.\n" (string-join failed ", ")))
-     (when timed-out
-       (format "Last fetch timed out for: %s.\n" (string-join timed-out ", ")))
-     (when (and credentials (stringp (car credentials)))
-       (format "Last fetch needed credentials for: %s.%s\n"
-               (string-join credentials ", ")
-               (if (bound-and-true-p straight-display-subprocess-prompts)
-                   ""
-                 "  Set `straight-display-subprocess-prompts' to enter them.")))
-     "\n")))
+              (if fetch "cancel the fetch" "fetch new commits")
+              (if (eq straight-overview--show 'all) "only outdated" "all")))
+     (if fetch
+         (format "Fetching in the background: %s.\n"
+                 (straight-overview--fetch-progress fetch))
+       (concat
+        (when failed
+          (format "Last fetch failed for: %s.\n" (string-join failed ", ")))
+        (when timed-out
+          (format "Last fetch timed out for: %s.\n" (string-join timed-out ", ")))
+        (when (and credentials (stringp (car credentials)))
+          (format "Last fetch needed credentials for: %s.%s\n"
+                  (string-join credentials ", ")
+                  (if (bound-and-true-p straight-display-subprocess-prompts)
+                      ""
+                    "  Set `straight-display-subprocess-prompts' to enter them.")))
+        "\n")))))
 
 (defun straight-overview--draw-banner ()
   "Show the banner above the first row.
