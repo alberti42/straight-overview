@@ -1133,7 +1133,13 @@ the overview refreshes when the fetch ends."
         (buf (get-buffer-create "*straight-overview*")))
     (with-current-buffer buf
       (unless (derived-mode-p 'straight-overview-mode)
-        (straight-overview-mode))
+        (straight-overview-mode)
+        ;; The banner is an overlay on the first row's line, so line numbers
+        ;; would number the banner instead of that row.  Turned off here:
+        ;; `global-display-line-numbers-mode' turns them on after the mode
+        ;; body has run.
+        (when (bound-and-true-p display-line-numbers-mode)
+          (display-line-numbers-mode -1)))
       (straight-overview-refresh))
     (when (and do-fetch (not straight-overview--fetch))
       (straight-overview--fetch-start))
