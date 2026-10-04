@@ -6,6 +6,7 @@ A read-only overview and **selective-upgrade UI** for packages managed by
 `straight-pull-all` is all-or-nothing. `straight-overview` answers a different
 question — *which* of my packages have newer commits upstream, and *how far*
 behind am I? — and lets you upgrade only the ones you choose, dired-style.
+Pressing <kbd>G</kbd> fetches all remotes in parallel, in the background.
 
 ![straight-overview buffer: packages with their behind-upstream counts; marked rows highlighted, pinned rows faded](screenshot.jpg)
 
