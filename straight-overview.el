@@ -41,9 +41,10 @@
 ;; much wall-clock time the installed checkout is behind the tracked upstream
 ;; branch.  By default only outdated packages are shown.
 ;;
-;; The list opens instantly from local git refs (no network).  The displayed
-;; "behind" figures reflect the last time each remote was fetched; press `G'
-;; to run `straight-fetch-all' and refresh against live remotes.
+;; The list is built from local git refs (no network), running git for all
+;; packages in parallel.  The displayed "behind" figures reflect the last
+;; time each remote was fetched; press `G' to run `straight-fetch-all' and
+;; refresh against live remotes.
 ;;
 ;; Packages are marked dired-style and acted on in a batch:
 ;;
@@ -91,8 +92,8 @@
 
 (defcustom straight-overview-fetch-on-open nil
   "Whether to run `straight-fetch-all' when opening the overview.
-nil opens instantly from local refs (press G to fetch later)."
-  :type '(choice (const :tag "Never (open instantly; refresh with G)" nil)
+nil opens from local refs without fetching (press G to fetch later)."
+  :type '(choice (const :tag "Never (open from local refs; refresh with G)" nil)
                  (const :tag "Ask each time" ask)
                  (const :tag "Always fetch first" t))
   :group 'straight-overview)
@@ -118,6 +119,13 @@ When nil, straight rebuilds the modified repos on the next Emacs
 restart (the merge registers a repo modification).
 Also governs whether `straight-overview-restore' rebuilds in-session."
   :type 'boolean
+  :group 'straight-overview)
+
+(defcustom straight-overview-jobs nil
+  "Maximum number of git processes to run at once while scanning.
+nil uses the number of processors (`num-processors')."
+  :type '(choice (const :tag "Number of processors" nil)
+                 (natnum :tag "Processes"))
   :group 'straight-overview)
 
 (defcustom straight-overview-pinned-file nil
@@ -162,6 +170,7 @@ popping a new one for each package.")
 
 (defvar-local straight-overview--mark-overlays nil
   "Overlays highlighting the currently marked rows.")
+
 
 (defvar straight-overview--pins nil
   "Alist of (PACKAGE-NAME . COMMIT) for pinned packages.
@@ -211,6 +220,62 @@ The symbol `unknown' until `straight-overview--ahead-behind-p' checks.")
               (string-trim (buffer-string)))))
       (error nil))))
 
+(defun straight-overview--git-batch (jobs)
+  "Run the git calls JOBS in parallel; return their results in order.
+Each job is (DIR . ARGS).  Each result is trimmed stdout, or nil on
+failure, as from `straight-overview--git'.  At most
+`straight-overview-jobs' processes run at once; a finished process
+hands its slot to the next job in the queue."
+  (let* ((width (max 1 (or straight-overview-jobs (num-processors))))
+         (results (make-vector (length jobs) nil))
+         (queue (seq-map-indexed (lambda (job i) (cons i job)) jobs))
+         (pending (length jobs))
+         procs)
+    (cl-labels
+        ((finish (proc)
+           (let ((buf (process-buffer proc)))
+             (unwind-protect
+                 (when (and (eq (process-status proc) 'exit)
+                            (eq 0 (process-exit-status proc)))
+                   (aset results (process-get proc 'index)
+                         (with-current-buffer buf
+                           (string-trim (buffer-string)))))
+               (kill-buffer buf)
+               (setq procs (delq proc procs))
+               (cl-decf pending)
+               (start))))
+         (start ()
+           (while (and queue (< (length procs) width))
+             (pcase-let ((`(,i ,dir . ,args) (pop queue)))
+               (let ((buf (generate-new-buffer " *straight-overview-git*" t)))
+                 (condition-case nil
+                     (let* ((default-directory (file-name-as-directory dir))
+                            (proc (make-process
+                                   :name "straight-overview-git"
+                                   :buffer buf
+                                   :command (cons "git" args)
+                                   :connection-type 'pipe
+                                   :noquery t
+                                   :sentinel (lambda (p _event)
+                                               (unless (process-live-p p)
+                                                 (finish p))))))
+                       (process-put proc 'index i)
+                       (push proc procs))
+                   (error (kill-buffer buf)
+                          (cl-decf pending))))))))
+      (unwind-protect
+          (progn
+            (start)
+            (while (> pending 0)
+              (accept-process-output nil 0.05)))
+        ;; Reached early only on a quit: stop the processes still running.
+        (setq queue nil)
+        (dolist (proc procs)
+          (set-process-sentinel proc #'ignore)
+          (delete-process proc)
+          (kill-buffer (process-buffer proc)))))
+    (append results nil)))
+
 (defun straight-overview--ahead-behind-p (dir)
   "Return non-nil if git supports `%(ahead-behind:...)'; run git in DIR.
 Checked once per session."
@@ -221,26 +286,30 @@ Checked once per session."
                  (version<= "2.41" (match-string 1 v))))))
   straight-overview--ahead-behind)
 
-(defun straight-overview--refs (dir remote ahead-behind)
-  "List local branches and branches of REMOTE in DIR, in one git call.
+(defun straight-overview--refs-args (remote ahead-behind)
+  "Return git arguments listing local branches and branches of REMOTE.
+One line per ref: name, hash, commit timestamp, then (with AHEAD-BEHIND)
+the ref's commits missing from HEAD, then the checked-out marker."
+  (list "for-each-ref"
+        (concat "--format=%(refname)%09%(objectname)%09%(committerdate:unix)"
+                (if ahead-behind "%09%(ahead-behind:HEAD)" "")
+                "%09%(HEAD)")
+        "refs/heads" (concat "refs/remotes/" remote)))
+
+(defun straight-overview--parse-refs (out ahead-behind)
+  "Parse OUT, the output of `straight-overview--refs-args' with AHEAD-BEHIND.
 Each element is (REFNAME HASH TIMESTAMP BEHIND HEAD-P).  BEHIND counts
 the ref's commits missing from HEAD; it is nil unless AHEAD-BEHIND."
-  (let ((out (straight-overview--git
-              dir "for-each-ref"
-              (concat "--format=%(refname)%09%(objectname)%09%(committerdate:unix)"
-                      (if ahead-behind "%09%(ahead-behind:HEAD)" "")
-                      "%09%(HEAD)")
-              "refs/heads" (concat "refs/remotes/" remote))))
-    (when out
-      (mapcar (lambda (line)
-                (let ((f (split-string line "\t")))
-                  ;; The trailing HEAD marker is a space when not checked out,
-                  ;; and `string-trim' strips it from the last line.
-                  (list (nth 0 f) (nth 1 f) (nth 2 f)
-                        (and ahead-behind (nth 3 f)
-                             (string-to-number (nth 3 f)))
-                        (equal (nth (if ahead-behind 4 3) f) "*"))))
-              (split-string out "\n" t)))))
+  (when out
+    (mapcar (lambda (line)
+              (let ((f (split-string line "\t")))
+                ;; The trailing HEAD marker is a space when not checked out,
+                ;; and `string-trim' strips it from the last line.
+                (list (nth 0 f) (nth 1 f) (nth 2 f)
+                      (and ahead-behind (nth 3 f)
+                           (string-to-number (nth 3 f)))
+                      (equal (nth (if ahead-behind 4 3) f) "*"))))
+            (split-string out "\n" t))))
 
 (defun straight-overview--duration (seconds)
   "Format SECONDS as a compact age like \"1y209d\", \"27d\" or \"5h\".
@@ -263,64 +332,134 @@ fork whose HEAD commit post-dates the tracked tip) render as \"<1d\"."
         (when url
           (replace-regexp-in-string "\\.git\\'" "" url))))))
 
-(defun straight-overview--record (name)
-  "Compute a status plist for package NAME, or nil if not a git clone."
+(cl-defstruct (straight-overview--repo
+               (:constructor straight-overview--make-repo)
+               (:copier nil))
+  "Git state of one package, gathered by `straight-overview--collect'.
+REFS is parsed `for-each-ref' output, TAG the `describe' output.  HEAD
+\(\"HASH\\tTIMESTAMP\" on a detached HEAD) and COUNT (`rev-list --count'
+on git before 2.41) are fallbacks, nil when not needed."
+  name recipe dir remote refs tag head count)
+
+(defun straight-overview--find-repo (name)
+  "Return a `straight-overview--repo' for package NAME, or nil.
+nil when the package is not a git clone."
   (let* ((recipe (gethash name straight--recipe-cache))
          (local-repo (plist-get recipe :local-repo))
          (dir (and local-repo (straight--repos-dir local-repo))))
     (when (and dir (file-directory-p dir)
                (file-exists-p (expand-file-name ".git" dir)))
-      (let* ((remote (or (plist-get recipe :remote) "origin"))
-             (ahead-behind (straight-overview--ahead-behind-p dir))
-             ;; One call gives the checked-out branch, HEAD's hash and
-             ;; timestamp, the upstream tip's timestamp and (git 2.41+) the
-             ;; behind count.
-             (refs (straight-overview--refs dir remote ahead-behind))
-             (current (seq-find (lambda (r) (nth 4 r)) refs))
-             (branch (or (plist-get recipe :branch)
-                         (and current
-                              (string-remove-prefix "refs/heads/" (car current)))))
-             (upstream (and branch (format "%s/%s" remote branch)))
-             (up (and upstream (assoc (concat "refs/remotes/" upstream) refs)))
-             ;; Detached HEAD: no branch is marked, so ask for HEAD itself.
-             (head (if current
-                       (list (nth 1 current) (nth 2 current))
-                     (let ((s (straight-overview--git
-                               dir "log" "-1" "--format=%H%x09%ct" "HEAD")))
-                       (and s (split-string s "\t")))))
-             (commit (car head))
-             (head-ts (cadr head))
-             (installed (if commit (substring commit 0 (min 8 (length commit))) "?"))
-             (tag (or (straight-overview--git dir "describe" "--tags" "--abbrev=0") ""))
-             (url (straight-overview--url recipe))
-             (commits (and up
-                           (if ahead-behind
-                               (nth 3 up)
-                             (let ((s (straight-overview--git
-                                       dir "rev-list" "--count"
-                                       (format "HEAD..%s" upstream))))
-                               (and s (string-to-number s))))))
-             (up-ts (nth 2 up))
-             (behind-secs (and head-ts up-ts
-                               (- (string-to-number up-ts) (string-to-number head-ts))))
-             (outdated (and commits (> commits 0)))
-             (behind (cond ((null commits) "?")
-                           ((zerop commits) "")
-                           (t (format "(%d; %s)" commits
-                                      (straight-overview--duration (or behind-secs 0)))))))
-        (list :name name :dir dir :branch (or branch "?") :remote remote
-              :upstream upstream :url url :installed installed :commit commit
-              :tag tag :commits commits :behind behind
-              :behind-secs (or behind-secs 0) :outdated outdated)))))
+      (straight-overview--make-repo
+       :name name :recipe recipe :dir dir
+       :remote (or (plist-get recipe :remote) "origin")))))
+
+(defun straight-overview--current (repo)
+  "Return REPO's ref row for the checked-out branch, or nil if detached."
+  (seq-find (lambda (r) (nth 4 r)) (straight-overview--repo-refs repo)))
+
+(defun straight-overview--branch (repo)
+  "Return REPO's recipe `:branch', else its checked-out branch, or nil."
+  (or (plist-get (straight-overview--repo-recipe repo) :branch)
+      (let ((current (straight-overview--current repo)))
+        (and current (string-remove-prefix "refs/heads/" (car current))))))
+
+(defun straight-overview--upstream (repo)
+  "Return REPO's upstream as \"REMOTE/BRANCH\", or nil."
+  (let ((branch (straight-overview--branch repo)))
+    (and branch (format "%s/%s" (straight-overview--repo-remote repo) branch))))
+
+(defun straight-overview--upstream-row (repo)
+  "Return REPO's ref row for its upstream, or nil if there is none."
+  (let ((upstream (straight-overview--upstream repo)))
+    (and upstream
+         (assoc (concat "refs/remotes/" upstream)
+                (straight-overview--repo-refs repo)))))
+
+(defun straight-overview--fallbacks (repo ahead-behind)
+  "Return (SLOT . JOB) pairs for the git calls REPO still needs.
+A detached HEAD needs `log -1 HEAD'; git before 2.41 (AHEAD-BEHIND nil)
+needs `rev-list --count'.  SLOT names the REPO field for the result."
+  (let ((dir (straight-overview--repo-dir repo))
+        jobs)
+    (unless (straight-overview--current repo)
+      (push (cons 'head (list dir "log" "-1" "--format=%H%x09%ct" "HEAD")) jobs))
+    (when (and (not ahead-behind) (straight-overview--upstream-row repo))
+      (push (cons 'count (list dir "rev-list" "--count"
+                               (format "HEAD..%s" (straight-overview--upstream repo))))
+            jobs))
+    jobs))
+
+(defun straight-overview--record (repo ahead-behind)
+  "Build the status plist for REPO from its git output.
+AHEAD-BEHIND says whether REPO's refs carry behind counts."
+  (let* ((recipe (straight-overview--repo-recipe repo))
+         (current (straight-overview--current repo))
+         (branch (straight-overview--branch repo))
+         (upstream (straight-overview--upstream repo))
+         (up (straight-overview--upstream-row repo))
+         (head (if current
+                   (list (nth 1 current) (nth 2 current))
+                 (let ((s (straight-overview--repo-head repo)))
+                   (and s (split-string s "\t")))))
+         (commit (car head))
+         (head-ts (cadr head))
+         (installed (if commit (substring commit 0 (min 8 (length commit))) "?"))
+         (tag (or (straight-overview--repo-tag repo) ""))
+         (url (straight-overview--url recipe))
+         (commits (and up
+                       (if ahead-behind
+                           (nth 3 up)
+                         (let ((s (straight-overview--repo-count repo)))
+                           (and s (string-to-number s))))))
+         (up-ts (nth 2 up))
+         (behind-secs (and head-ts up-ts
+                           (- (string-to-number up-ts) (string-to-number head-ts))))
+         (outdated (and commits (> commits 0)))
+         (behind (cond ((null commits) "?")
+                       ((zerop commits) "")
+                       (t (format "(%d; %s)" commits
+                                  (straight-overview--duration (or behind-secs 0)))))))
+    (list :name (straight-overview--repo-name repo)
+          :dir (straight-overview--repo-dir repo) :branch (or branch "?")
+          :remote (straight-overview--repo-remote repo)
+          :upstream upstream :url url :installed installed :commit commit
+          :tag tag :commits commits :behind behind
+          :behind-secs (or behind-secs 0) :outdated outdated)))
 
 (defun straight-overview--collect ()
-  "Scan every straight package, returning a sorted list of status plists."
-  (let (records)
-    (dolist (name (hash-table-keys straight--recipe-cache))
-      (let ((rec (ignore-errors (straight-overview--record name))))
-        (when rec (push rec records))))
-    (sort records (lambda (a b)
-                    (string< (plist-get a :name) (plist-get b :name))))))
+  "Scan every straight package, returning a sorted list of status plists.
+Git runs in two parallel rounds: `for-each-ref' and `describe' for every
+package, then the fallback calls that the first round shows are needed."
+  (let* ((repos (delq nil (mapcar #'straight-overview--find-repo
+                                  (hash-table-keys straight--recipe-cache))))
+         (ahead-behind (and repos
+                            (straight-overview--ahead-behind-p
+                             (straight-overview--repo-dir (car repos)))))
+         (round1 (straight-overview--git-batch
+                  (mapcan (lambda (repo)
+                            (let ((dir (straight-overview--repo-dir repo)))
+                              (list (cons dir (straight-overview--refs-args
+                                               (straight-overview--repo-remote repo)
+                                               ahead-behind))
+                                    (list dir "describe" "--tags" "--abbrev=0"))))
+                          repos))))
+    (cl-loop for repo in repos
+             for (refs tag) on round1 by #'cddr
+             do (setf (straight-overview--repo-refs repo)
+                      (straight-overview--parse-refs refs ahead-behind)
+                      (straight-overview--repo-tag repo) tag))
+    (let ((fallbacks (mapcan (lambda (repo)
+                               (mapcar (lambda (f) (cons repo f))
+                                       (straight-overview--fallbacks repo ahead-behind)))
+                             repos)))
+      (cl-loop for (repo slot . _job) in fallbacks
+               for out in (straight-overview--git-batch (mapcar #'cddr fallbacks))
+               do (setf (cl-struct-slot-value 'straight-overview--repo slot repo) out)))
+    (sort (delq nil (mapcar (lambda (repo)
+                              (ignore-errors (straight-overview--record repo ahead-behind)))
+                            repos))
+          (lambda (a b)
+            (string< (plist-get a :name) (plist-get b :name))))))
 
 ;;; Rendering
 

@@ -39,9 +39,14 @@ top of straight's own data and commands; it adds a UI, not a new model.
 
 ## Design
 
-- **Opens instantly.** The list is built from *local* git refs — no network
-  call when you open it. The "behind" figures reflect the last time each
-  remote was fetched.
+- **Opening the list does not contact the remotes.** The list is built from
+  *local* git refs. The "behind" figures reflect the last time each remote
+  was fetched. Each package needs two git calls: `git for-each-ref` for the
+  branch, the commit hashes and the behind count, and `git describe` for the
+  tag. The scan runs these calls for all packages in parallel, at most
+  `straight-overview-jobs` processes at once, and Emacs waits until the last
+  one finishes before drawing the table: 0.4 s for 111 packages on an 8-core
+  Mac. <kbd>C-g</kbd> stops the scan and the git processes still running.
 - **Fetch is explicit and decoupled.** Press <kbd>G</kbd> to run
   `straight-fetch-all` and refresh against live remotes. You decide when to
   pay the network cost, not the act of opening the list.
@@ -97,10 +102,11 @@ header, etc.).
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `straight-overview-fetch-on-open` | `nil` | `nil` opens instantly (fetch later with <kbd>G</kbd>); `ask` prompts y/n; `t` always fetches first. A prefix arg (`C-u M-x straight-overview`) forces a fetch for one invocation. |
+| `straight-overview-fetch-on-open` | `nil` | `nil` opens from local refs without fetching (fetch later with <kbd>G</kbd>); `ask` prompts y/n; `t` always fetches first. A prefix arg (`C-u M-x straight-overview`) forces a fetch for one invocation. |
 | `straight-overview-show` | `outdated` | `outdated` shows only behind packages; `all` shows everything. Toggle live with <kbd>a</kbd>. |
 | `straight-overview-changelog-use-magit` | `t` | When `t` and Magit is loaded, <kbd>c</kbd> opens a `magit-log` buffer. Set to `nil` to always use the plain `git log` listing even if Magit is installed (useful for debugging the built-in path). |
 | `straight-overview-build-on-pull` | `nil` | `nil` pulls only — straight rebuilds the modified repos on the next Emacs restart. `t` also runs `straight-rebuild-package` immediately, doing everything in one go. Also governs whether <kbd>R</kbd> rebuilds in-session. |
+| `straight-overview-jobs` | `nil` | Maximum number of git processes run at once while scanning. `nil` uses the number of processors (`num-processors`). |
 | `straight-overview-pinned-file` | `nil` | When set to a path, pinned packages persist there as an `.eld` alist of `(name . commit)`. When `nil`, pinning is session-only. |
 
 The overview opens in the **selected window** by default. Because it is shown
