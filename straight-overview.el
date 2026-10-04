@@ -170,6 +170,10 @@ for pin state across the session.")
 (defvar straight-overview--pins-loaded nil
   "Non-nil once `straight-overview--pins' has been read from disk.")
 
+(defvar straight-overview--ahead-behind 'unknown
+  "Whether git supports the `ahead-behind' format atom (git 2.41+).
+The symbol `unknown' until `straight-overview--ahead-behind-p' checks.")
+
 ;;; Pins
 
 (defun straight-overview--ensure-pins ()
@@ -207,6 +211,37 @@ for pin state across the session.")
               (string-trim (buffer-string)))))
       (error nil))))
 
+(defun straight-overview--ahead-behind-p (dir)
+  "Return non-nil if git supports `%(ahead-behind:...)'; run git in DIR.
+Checked once per session."
+  (when (eq straight-overview--ahead-behind 'unknown)
+    (setq straight-overview--ahead-behind
+          (let ((v (straight-overview--git dir "--version")))
+            (and v (string-match "\\([0-9]+\\.[0-9]+\\)" v)
+                 (version<= "2.41" (match-string 1 v))))))
+  straight-overview--ahead-behind)
+
+(defun straight-overview--refs (dir remote ahead-behind)
+  "List local branches and branches of REMOTE in DIR, in one git call.
+Each element is (REFNAME HASH TIMESTAMP BEHIND HEAD-P).  BEHIND counts
+the ref's commits missing from HEAD; it is nil unless AHEAD-BEHIND."
+  (let ((out (straight-overview--git
+              dir "for-each-ref"
+              (concat "--format=%(refname)%09%(objectname)%09%(committerdate:unix)"
+                      (if ahead-behind "%09%(ahead-behind:HEAD)" "")
+                      "%09%(HEAD)")
+              "refs/heads" (concat "refs/remotes/" remote))))
+    (when out
+      (mapcar (lambda (line)
+                (let ((f (split-string line "\t")))
+                  ;; The trailing HEAD marker is a space when not checked out,
+                  ;; and `string-trim' strips it from the last line.
+                  (list (nth 0 f) (nth 1 f) (nth 2 f)
+                        (and ahead-behind (nth 3 f)
+                             (string-to-number (nth 3 f)))
+                        (equal (nth (if ahead-behind 4 3) f) "*"))))
+              (split-string out "\n" t)))))
+
 (defun straight-overview--duration (seconds)
   "Format SECONDS as a compact age like \"1y209d\", \"27d\" or \"5h\".
 Non-positive SECONDS (the upstream tip is not newer than HEAD, e.g. on a
@@ -236,23 +271,36 @@ fork whose HEAD commit post-dates the tracked tip) render as \"<1d\"."
     (when (and dir (file-directory-p dir)
                (file-exists-p (expand-file-name ".git" dir)))
       (let* ((remote (or (plist-get recipe :remote) "origin"))
+             (ahead-behind (straight-overview--ahead-behind-p dir))
+             ;; One call gives the checked-out branch, HEAD's hash and
+             ;; timestamp, the upstream tip's timestamp and (git 2.41+) the
+             ;; behind count.
+             (refs (straight-overview--refs dir remote ahead-behind))
+             (current (seq-find (lambda (r) (nth 4 r)) refs))
              (branch (or (plist-get recipe :branch)
-                         (straight-overview--git dir "symbolic-ref" "--short" "HEAD")))
+                         (and current
+                              (string-remove-prefix "refs/heads/" (car current)))))
              (upstream (and branch (format "%s/%s" remote branch)))
-             ;; One call gets HEAD's full hash and committer timestamp; the
-             ;; short hash is just a prefix, no extra `rev-parse'.
-             (head (straight-overview--git dir "log" "-1" "--format=%H%x09%ct" "HEAD"))
-             (head-parts (and head (split-string head "\t")))
-             (commit (car head-parts))
-             (head-ts (cadr head-parts))
+             (up (and upstream (assoc (concat "refs/remotes/" upstream) refs)))
+             ;; Detached HEAD: no branch is marked, so ask for HEAD itself.
+             (head (if current
+                       (list (nth 1 current) (nth 2 current))
+                     (let ((s (straight-overview--git
+                               dir "log" "-1" "--format=%H%x09%ct" "HEAD")))
+                       (and s (split-string s "\t")))))
+             (commit (car head))
+             (head-ts (cadr head))
              (installed (if commit (substring commit 0 (min 8 (length commit))) "?"))
              (tag (or (straight-overview--git dir "describe" "--tags" "--abbrev=0") ""))
              (url (straight-overview--url recipe))
-             (count-str (and upstream
-                             (straight-overview--git dir "rev-list" "--count"
-                                                     (format "HEAD..%s" upstream))))
-             (commits (and count-str (string-to-number count-str)))
-             (up-ts (and upstream (straight-overview--git dir "log" "-1" "--format=%ct" upstream)))
+             (commits (and up
+                           (if ahead-behind
+                               (nth 3 up)
+                             (let ((s (straight-overview--git
+                                       dir "rev-list" "--count"
+                                       (format "HEAD..%s" upstream))))
+                               (and s (string-to-number s))))))
+             (up-ts (nth 2 up))
              (behind-secs (and head-ts up-ts
                                (- (string-to-number up-ts) (string-to-number head-ts))))
              (outdated (and commits (> commits 0)))
