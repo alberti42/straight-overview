@@ -15,9 +15,11 @@ M-x straight-overview
 
 opens a buffer with one row per git-managed package:
 
-| Pin | Package | Installed | Branch | Behind | Tag | Remote |
-|-----|---------|-----------|--------|--------|-----|--------|
-|     | consult | a1b2c3d   | main   | (3; 14d) | 1.9 | https://github.com/minad/consult |
+| # | Pin | Package | Installed | Branch | Behind | Tag | Remote |
+|---|-----|---------|-----------|--------|--------|-----|--------|
+| 1 |     | consult | a1b2c3d   | main   | (3; 14d) | 1.9 | https://github.com/minad/consult |
+
+The **#** column numbers the rows in the current sort order and view.
 
 The **Behind** column shows `(<commits>; <time>)` — how many commits and how
 much wall-clock time your installed checkout is behind the tracked upstream
@@ -58,6 +60,7 @@ top of straight's own data and commands; it adds a UI, not a new model.
   as of the last fetch and reminds you to press <kbd>G</kbd>. While a fetch
   runs, it shows the progress; afterwards, it lists the packages whose fetch
   failed, timed out, or needed credentials.
+
 - **Selective, dired-style upgrades.** Mark the packages you want, then
   execute. No more updating 100 packages to get the one you cared about.
 - **Pinning (holds).** Pin a package to *hold* it: it stays visible (faded, with

@@ -576,7 +576,9 @@ package, then the fallback calls that the first round shows are needed."
                                   (propertize (plist-get rec :behind)
                                               'face 'straight-overview-outdated)
                                 (plist-get rec :behind)))
-                      (cells (list (if pinned "*" "")
+                      ;; "#" is filled in by `straight-overview--print-entry'.
+                      (cells (list ""
+                                   (if pinned "*" "")
                                    name
                                    (plist-get rec :installed)
                                    (plist-get rec :branch)
@@ -589,6 +591,19 @@ package, then the fallback calls that the first round shows are needed."
                                        cells)))
                  (list name (apply #'vector cells)))))
            straight-overview--records))))
+
+(defun straight-overview--print-entry (id cols)
+  "Print the row ID with COLS, numbering it by its line in the buffer.
+Calls `tabulated-list-print-entry' with the \"#\" column filled in.  The
+number is computed while printing, so it follows the current sort and
+filter, also after a column sort that does not go through
+`straight-overview--render'."
+  (let ((cols (copy-sequence cols))
+        (n (number-to-string (line-number-at-pos))))
+    (aset cols 0 (if (straight-overview--pinned-p id)
+                     (propertize n 'face 'shadow)
+                   n))
+    (tabulated-list-print-entry id cols)))
 
 (defun straight-overview--redraw-marks ()
   "Re-apply the mark column and row highlight from `straight-overview--marks'."
@@ -1106,7 +1121,8 @@ actionable (RET to inspect it, etc.); otherwise fall back to a plain
 (define-derived-mode straight-overview-mode tabulated-list-mode "Straight-Overview"
   "Major mode listing straight.el packages and their upstream status."
   (setq tabulated-list-format
-        [("Pin"        3 nil)
+        [("#"          4 nil :right-align t)
+         ("Pin"        3 nil)
          ("Package"   28 t)
          ("Installed" 10 nil)
          ("Branch"    14 t)
@@ -1114,6 +1130,7 @@ actionable (RET to inspect it, etc.); otherwise fall back to a plain
          ("Tag"       14 t)
          ("Remote"     0 nil)])
   (setq tabulated-list-padding 2)
+  (setq tabulated-list-printer #'straight-overview--print-entry)
   (setq tabulated-list-sort-key '("Package" . nil))
   (setq straight-overview--marks (make-hash-table :test #'equal))
   (setq straight-overview--show straight-overview-show)
