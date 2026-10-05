@@ -115,6 +115,7 @@ header, etc.).
 |----------|---------|---------|
 | `straight-overview-fetch-on-open` | `nil` | `nil` opens from local refs without fetching (fetch later with <kbd>G</kbd>); `ask` prompts y/n; `t` always fetches. The fetch runs in the background, as with <kbd>G</kbd>. A prefix arg (`C-u M-x straight-overview`) forces a fetch for one invocation. |
 | `straight-overview-show` | `outdated` | `outdated` shows only behind packages; `all` shows everything. Toggle live with <kbd>a</kbd>. |
+| `straight-overview-hl-line` | `t` | When non-nil, highlight the current row with `hl-line-mode`. |
 | `straight-overview-changelog-use-magit` | `t` | When `t` and Magit is loaded, <kbd>c</kbd> opens a `magit-log` buffer. Set to `nil` to always use the plain `git log` listing even if Magit is installed (useful for debugging the built-in path). |
 | `straight-overview-build-on-pull` | `nil` | `nil` pulls only — straight rebuilds the modified repos on the next Emacs restart. `t` also runs `straight-rebuild-package` immediately, doing everything in one go. Also governs whether <kbd>R</kbd> rebuilds in-session. |
 | `straight-overview-jobs` | `nil` | Maximum number of git processes run at once while scanning local refs. `nil` uses the number of processors (`num-processors`). |

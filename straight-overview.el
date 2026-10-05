@@ -105,6 +105,11 @@ and refreshes when the fetch ends.  nil does not fetch (press G later)."
                  (const :tag "All" all))
   :group 'straight-overview)
 
+(defcustom straight-overview-hl-line t
+  "When non-nil, highlight the current row with `hl-line-mode'."
+  :type 'boolean
+  :group 'straight-overview)
+
 (defcustom straight-overview-changelog-use-magit t
   "Whether `straight-overview-changelog' uses Magit when it is available.
 When non-nil (the default) and Magit is loaded, the changelog opens in a
@@ -1131,7 +1136,8 @@ actionable (RET to inspect it, etc.); otherwise fall back to a plain
          ("Behind"    18 straight-overview--behind-lessp)
          ("Tag"       14 t)
          ("Remote"     0 nil)])
-  (hl-line-mode 1)
+  (when straight-overview-hl-line
+    (hl-line-mode 1))
   (setq tabulated-list-padding 2)
   (setq tabulated-list-printer #'straight-overview--print-entry)
   (setq tabulated-list-sort-key '("Package" . nil))
