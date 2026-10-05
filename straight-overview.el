@@ -611,6 +611,7 @@ actionable (RET to inspect it, etc.); otherwise fall back to a plain
          ("Behind"    18 straight-overview--behind-lessp)
          ("Tag"       14 t)
          ("Remote"     0 nil)])
+  (hl-line-mode 1)
   (setq tabulated-list-padding 2)
   (setq tabulated-list-sort-key '("Package" . nil))
   (setq straight-overview--marks (make-hash-table :test #'equal))
