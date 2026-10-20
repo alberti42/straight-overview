@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - <kbd>x</kbd> pulls each package after the marked packages it depends on. A
   package whose `Package-Requires` at the upstream tip names a dependency
   that is not installed, or older than required, is skipped with a warning.
+  The check follows package.el's rules: a dependency without a version
+  header has version 0, and a package whose header package.el could not
+  read is skipped too.
 
 ### Fixed
 

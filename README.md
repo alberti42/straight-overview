@@ -94,23 +94,33 @@ If `straight-overview-build-on-pull` is non-nil, each package is also rebuilt
 with `straight-rebuild-package`; otherwise straight rebuilds the modified
 repos on the next Emacs restart.
 
-Before pulling, <kbd>x</kbd> checks dependency versions:
+Before pulling, <kbd>x</kbd> checks dependency versions with package.el's
+rules; where package.el would refuse to install a package, <kbd>x</kbd>
+skips it:
 
 1. It reads each marked package's `Package-Requires` (or its `-pkg.el`) at
-   the upstream tip, which is the version the pull would install.
+   the upstream tip, which is the version the pull would install. As in
+   package.el, a bare `foo` or `(foo)` requires `foo` at any version. A
+   package whose requirements cannot be read, or whose own version header
+   is not a version, is skipped with a warning.
 2. It orders the pulls so that each package is pulled after the marked
    packages it depends on.
 3. Just before pulling a package, it reads the `Version` header of each
-   dependency: at the upstream tip if the dependency lives in the same
-   repository, otherwise at HEAD, which already includes the dependencies
-   pulled earlier in the batch. Emacs and built-in packages are checked with
-   `package-built-in-p`.
+   dependency (or its `Package-Version` header, which takes precedence):
+   at the upstream tip if the dependency lives in the same repository,
+   otherwise at HEAD, which already includes the dependencies pulled
+   earlier in the batch. As in `package-vc`, a dependency without a
+   version header has version 0. Emacs and built-in packages are checked
+   with `package-built-in-p`.
 4. A package whose dependency is not installed, or older than required, is
    not pulled; `*Warnings*` gets a line such as
    `forge was not pulled; it requires magit 4.7 (installed: 4.6.0)`.
 
-A dependency that declares no version counts as met. To upgrade a package
-together with a dependency it needs, mark both.
+package.el, when a requirement is not met, installs a newer version from a
+package archive, or installs nothing. straight has no archive to install
+from, so <kbd>x</kbd> skips only the packages whose requirements are not met
+and pulls the others. To upgrade a package together with a dependency it
+needs, mark both.
 
 ## Pinning
 
@@ -202,10 +212,14 @@ the bottom:
 - **No stable releases.** straight tracks one branch per package. **Behind**
   compares with that branch's tip; **Tag** shows the nearest tag, and is
   blank for untagged packages.
-- **Version headers are often stale.** The dependency check trusts each
-  package's `Version` header. Many packages bump it only at releases, so a
-  dependency can satisfy the header check while missing commits the
-  dependent needs, or the reverse.
+- **Version headers are often stale.** Like package.el for packages from
+  git (`package-vc`), GNU ELPA or MELPA Stable, the dependency check trusts
+  each package's `Version` header. Many packages bump it only at releases,
+  so a dependency can pass the check while missing commits the dependent
+  needs, or fail it while having them.
+- **straight.el is skipped.** Its header says `Version: prerelease`, which
+  is not a version, so package.el would not install it and <kbd>x</kbd> does
+  not pull it. Pull it with `straight-pull-package`.
 - **Shallow clones.** Commit counts and changelogs assume full clones,
   straight's default (`straight-vc-git-default-clone-depth` is `full`). For a
   shallow clone they can be too low.
