@@ -1,83 +1,141 @@
 # straight-overview
 
-A overview and **selective-upgrade UI** for packages managed by
-[straight.el](https://github.com/radian-software/straight.el).
+An Emacs package for upgrading [straight.el](https://github.com/radian-software/straight.el)
+packages one by one instead of all at once.
 
 Disclosure: Written with AI assistance (Claude). Every change is reviewed
 and tested by the author, and design decisions are the author's.
 
-`straight-pull-all` is all-or-nothing. `straight-overview` answers a different
-question — *which* of my packages have newer commits upstream, and *how far*
-behind am I? — and lets you upgrade only the ones you choose, dired-style.
-Pressing <kbd>G</kbd> fetches all remotes in parallel, in the background.
+`M-x straight-overview` lists your straight packages and how many commits and
+days each is behind its upstream branch. From that list you can:
+
+- **fetch** all remotes in parallel, in the background, while you keep
+  working;
+- **pull** only the packages you mark. Each package is pulled after the
+  marked packages it depends on, and a package whose dependencies are
+  missing or older than its `Package-Requires` asks for is skipped with a
+  warning;
+- **pin** a package at its installed commit, so it cannot be marked for
+  update, and later reset it to that commit;
+- **read the changelog** of the commits a pull would bring in.
 
 ![Pressing G starts the fetch while text is typed in another buffer](screenshot-fetch.gif)
 
-```
-M-x straight-overview
-```
+straight.el has `straight-pull-all`, which pulls every package, and
+`straight-pull-package`, which pulls one package by name. Neither tells you
+which packages have new commits. `straight-overview` shows that, then calls
+`straight-pull-package` for the packages you mark.
 
-opens a buffer with one row per git-managed package:
+## The list
+
+`M-x straight-overview` opens a buffer with one row per package that straight
+cloned with git:
 
 | # | Pin | Package | Installed | Branch | Behind | Tag | Remote |
 |---|-----|---------|-----------|--------|--------|-----|--------|
-| 1 |     | consult | a1b2c3d   | main   | (3; 14d) | 1.9 | https://github.com/minad/consult |
+| 1 |     | consult | a1b2c3d4  | main   | (3; 14d) | 1.9 | https://github.com/minad/consult |
 
-The **#** column numbers the rows in the current sort order and view.
+- **#** numbers the rows in the current sort order.
+- **Pin** shows `*` for a pinned package.
+- **Installed** is the checked-out commit.
+- **Branch** is the branch straight tracks: the recipe's `:branch`, else the
+  checked-out branch.
+- **Behind** is `(<commits>; <time>)`: how many commits the upstream branch
+  has that your checkout does not, and how much newer its last commit is
+  than yours. Sorting on this column sorts by time.
+- **Tag** is the nearest tag (`git describe --tags`).
+- **Remote** is the repository's web page.
 
-The **Behind** column shows `(<commits>; <time>)` — how many commits and how
-much wall-clock time your installed checkout is behind the tracked upstream
-branch. By default only outdated packages are listed.
+By default only packages that are behind are listed; <kbd>a</kbd> shows all
+packages. A banner above the table says how many packages are behind the
+remote as of the last fetch.
 
-## Motivation
+Opening the list does not contact the remotes: it reads the local git refs,
+which are as recent as the last fetch. Each package needs two git calls,
+`git for-each-ref` and `git describe`. The package runs them for all packages
+in parallel, at most `straight-overview-jobs` processes at once, and Emacs
+waits for the last one: 0.4 s for 111 packages on an 8-core Mac.
+<kbd>C-g</kbd> stops the scan and the git processes still running.
 
-straight.el is a wonderful package manager, but its upgrade story is
-coarse-grained: `straight-pull-all` updates *everything* at once. If you only
-want the latest Magit but would rather not move thirty other packages on the
-same day, you have to fall back to upgrading them one by one by name — with no
-overview of what actually has updates waiting, or how far behind you are.
+## Fetching
 
-`straight-overview` fills that gap. It gives you a single, at-a-glance buffer
-of exactly which packages are behind upstream and by how much, and lets you
-upgrade (or deliberately hold) just the ones you choose — without leaving
-Emacs, and without adopting a different package manager. Everything is built on
-top of straight's own data and commands; it adds a UI, not a new model.
+<kbd>G</kbd> runs `git fetch` in every repository, in the background. Each
+repository is fetched once, also when several packages share it. At most
+`straight-overview-fetch-jobs` fetches run at once (103 repositories take
+3.5 s with 16 at once), and Emacs stays usable meanwhile. The banner shows
+how many repositories are done. When the last fetch ends, the list refreshes
+and the banner names the packages whose fetch failed, timed out (after
+`straight-overview-fetch-timeout` seconds), or needed credentials. Pressing
+<kbd>G</kbd> while a fetch runs offers to cancel it.
 
-## Design
+The parallel fetches cannot ask for a username, password or passphrase: a
+remote that asks fails instead of waiting. If
+`straight-display-subprocess-prompts` is non-nil (the straight option that
+lets git ask you for credentials), the package asks once after the last
+fetch whether to enter them, then fetches those repositories again one after
+another and reads each prompt in the minibuffer. If the option is nil
+(straight's default), the banner lists those repositories. Credentials stored
+in a git credential helper, such as the macOS keychain, are used without a
+prompt.
 
-- **Opening the list does not contact the remotes.** The list is built from
-  *local* git refs. The "behind" figures reflect the last time each remote
-  was fetched. Each package needs two git calls: `git for-each-ref` for the
-  branch, the commit hashes and the behind count, and `git describe` for the
-  tag. The scan runs these calls for all packages in parallel, at most
-  `straight-overview-jobs` processes at once, and Emacs waits until the last
-  one finishes before drawing the table: 0.4 s for 111 packages on an 8-core
-  Mac. <kbd>C-g</kbd> stops the scan and the git processes still running.
-- **Fetch is explicit and runs in the background.** Press <kbd>G</kbd> to run
-  `git fetch` in every repository. The fetches run in parallel, at most
-  `straight-overview-fetch-jobs` at once, and Emacs stays usable meanwhile:
-  103 repositories take 3.5 s with 16 fetches at once. A fetch still
-  running after `straight-overview-fetch-timeout` seconds is stopped. When
-  the last fetch ends, the table refreshes. You decide when to pay the
-  network cost, not the act of opening the list.
-  A banner above the table gives the number of packages behind the remote
-  as of the last fetch and reminds you to press <kbd>G</kbd>. While a fetch
-  runs, it shows the progress; afterwards, it lists the packages whose fetch
-  failed, timed out, or needed credentials.
-- **Selective, dired-style upgrades.** Mark the packages you want, then
-  execute. No more updating 100 packages to get the one you cared about.
-  Each package is pulled after the marked packages it depends on. A package
-  whose `Package-Requires` at the upstream tip names a dependency that is not
-  installed, or older than required, is skipped with a warning.
-- **Pinning (holds).** Pin a package to *hold* it: it stays visible (faded, with
-  a `*` in the Pin column) but can't be marked for update, so you won't pull it
-  by accident. Pinning records the installed commit, and <kbd>R</kbd> resets the
-  package back to it. This is a UI-level hold — it's independent of straight's
-  own `straight-freeze-versions` lockfile and doesn't affect `straight-pull-all`.
+<kbd>G</kbd> runs `git fetch <remote>` directly instead of
+`straight-fetch-all`. `straight-fetch-all` first checks each repository
+(remote URLs, uncommitted changes, a merge in progress, the checked-out
+branch) and asks how to proceed when a check fails. A fetch only updates
+remote refs, so it does not need those checks. Pulling still goes through
+`straight-pull-package` and its checks.
+
+## Pulling
+
+Mark packages with <kbd>m</kbd> (or all outdated ones with <kbd>M</kbd>), then
+press <kbd>x</kbd>. The package calls `straight-pull-package` for each marked
+package, one at a time; Emacs waits until the last pull ends, then rescans.
+If `straight-overview-build-on-pull` is non-nil, each package is also rebuilt
+with `straight-rebuild-package`; otherwise straight rebuilds the modified
+repos on the next Emacs restart.
+
+Before pulling, <kbd>x</kbd> checks dependency versions:
+
+1. It reads each marked package's `Package-Requires` (or its `-pkg.el`) at
+   the upstream tip, which is the version the pull would install.
+2. It orders the pulls so that each package is pulled after the marked
+   packages it depends on.
+3. Just before pulling a package, it reads the `Version` header of each
+   dependency: at the upstream tip if the dependency lives in the same
+   repository, otherwise at HEAD, which already includes the dependencies
+   pulled earlier in the batch. Emacs and built-in packages are checked with
+   `package-built-in-p`.
+4. A package whose dependency is not installed, or older than required, is
+   not pulled; `*Warnings*` gets a line such as
+   `forge was not pulled; it requires magit 4.7 (installed: 4.6.0)`.
+
+A dependency that declares no version counts as met. To upgrade a package
+together with a dependency it needs, mark both.
+
+## Pinning
+
+<kbd>P</kbd> pins the package at point: the pin records the installed commit,
+and the package cannot be marked for update (<kbd>m</kbd> refuses,
+<kbd>M</kbd> skips it). Pinned rows are greyed out. <kbd>F</kbd> removes the
+pin. <kbd>R</kbd> resets a pinned package to its pinned commit: it checks out
+the branch straight tracks and runs `git reset --hard` to that commit, after
+asking, because this discards uncommitted changes in the repository.
+
+Pins are saved to `straight-overview-pinned-file` when it is set; otherwise
+they last until Emacs exits. They are independent of straight's lockfile
+(`straight-freeze-versions`) and do not affect `straight-pull-all`.
+
+## Changelog
+
+<kbd>c</kbd> lists the commits between the installed commit and the upstream
+tip (`HEAD..upstream`). With Magit installed, they open in a `magit-log`
+buffer, and pressing <kbd>c</kbd> on another package reuses that window.
+Without Magit, they open as a plain `git log --oneline` listing.
 
 ## Installation
 
-`straight-overview` requires a working straight.el. With `use-package`:
+`straight-overview` needs straight.el and Emacs 29.1 or later. With
+`use-package`:
 
 ```elisp
 (use-package straight-overview
@@ -92,47 +150,45 @@ Or directly:
  '(straight-overview :host github :repo "alberti42/straight-overview"))
 ```
 
-Requires Emacs 29.1+.
-
-## Keybindings
+## Keys
 
 | Key | Action |
 |-----|--------|
-| <kbd>m</kbd> | mark package at point for update |
+| <kbd>m</kbd> | mark the package at point for update |
 | <kbd>u</kbd> | unmark |
 | <kbd>U</kbd> | unmark all |
 | <kbd>M</kbd> | mark all outdated packages |
-| <kbd>x</kbd> | pull marked packages (and rebuild, if enabled); a package whose dependencies are not installed, or older than required, is skipped with a warning |
-| <kbd>P</kbd> | pin the package at point at its current commit (hold) |
-| <kbd>F</kbd> | free (unpin) the package at point |
-| <kbd>R</kbd> | restore the package at point to its pinned commit (no-op if unpinned) |
-| <kbd>c</kbd> | show changelog (`HEAD..upstream`) for package at point — a `magit-log` buffer when Magit is available (each commit actionable), else a plain `git log` listing |
-| <kbd>o</kbd> / <kbd>RET</kbd> | open the package's repo in a browser |
-| <kbd>a</kbd> | toggle outdated-only / show all packages |
-| <kbd>g</kbd> | re-scan from local refs (no fetch) |
-| <kbd>G</kbd> | fetch all remotes in the background, then re-scan; while a fetch runs, offer to cancel it |
+| <kbd>x</kbd> | pull the marked packages, after checking their dependencies (and rebuild, if enabled) |
+| <kbd>P</kbd> | pin the package at point at its installed commit |
+| <kbd>F</kbd> | remove the pin |
+| <kbd>R</kbd> | reset the package at point to its pinned commit |
+| <kbd>c</kbd> | show the commits a pull would bring in |
+| <kbd>o</kbd> / <kbd>RET</kbd> | open the package's repository in a browser |
+| <kbd>a</kbd> | show all packages / only outdated ones |
+| <kbd>g</kbd> | rescan the local refs (no fetch) |
+| <kbd>G</kbd> | fetch all remotes in the background, then rescan; during a fetch, offer to cancel it |
 
-Standard `tabulated-list-mode` keys also apply (sort by clicking a column
-header, etc.).
+The keys of `tabulated-list-mode` also work, for example clicking a column
+header to sort.
 
 ## Customization
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `straight-overview-fetch-on-open` | `nil` | `nil` opens from local refs without fetching (fetch later with <kbd>G</kbd>); `ask` prompts y/n; `t` always fetches. The fetch runs in the background, as with <kbd>G</kbd>. A prefix arg (`C-u M-x straight-overview`) forces a fetch for one invocation. |
-| `straight-overview-show` | `outdated` | `outdated` shows only behind packages; `all` shows everything. Toggle live with <kbd>a</kbd>. |
+| `straight-overview-fetch-on-open` | `nil` | `nil` opens the list without fetching; `ask` asks; `t` always fetches. The fetch runs in the background, as with <kbd>G</kbd>. `C-u M-x straight-overview` fetches once regardless. |
+| `straight-overview-show` | `outdated` | `outdated` lists only packages that are behind; `all` lists every package. <kbd>a</kbd> switches. |
 | `straight-overview-hl-line` | `t` | When non-nil, highlight the current row with `hl-line-mode`. |
-| `straight-overview-changelog-use-magit` | `t` | When `t` and Magit is loaded, <kbd>c</kbd> opens a `magit-log` buffer. Set to `nil` to always use the plain `git log` listing even if Magit is installed (useful for debugging the built-in path). |
-| `straight-overview-build-on-pull` | `nil` | `nil` pulls only — straight rebuilds the modified repos on the next Emacs restart. `t` also runs `straight-rebuild-package` immediately, doing everything in one go. Also governs whether <kbd>R</kbd> rebuilds in-session. |
+| `straight-overview-changelog-use-magit` | `t` | When non-nil and Magit is loaded, <kbd>c</kbd> opens a `magit-log` buffer. `nil` always uses the plain `git log` listing. |
+| `straight-overview-build-on-pull` | `nil` | `nil` pulls only; straight rebuilds the modified repos on the next Emacs restart. `t` also runs `straight-rebuild-package` right after each pull, and after <kbd>R</kbd>. |
 | `straight-overview-jobs` | `nil` | Maximum number of git processes run at once while scanning local refs. `nil` uses the number of processors (`num-processors`). |
 | `straight-overview-fetch-jobs` | `16` | Maximum number of `git fetch` processes run at once. A fetch mostly waits on its server, so more fetches than processors still pay off. |
 | `straight-overview-fetch-timeout` | `30` | Seconds after which a single repository's fetch is stopped and reported as timed out. `nil` means no limit. |
-| `straight-overview-pinned-file` | `nil` | When set to a path, pinned packages persist there as an `.eld` alist of `(name . commit)`. When `nil`, pinning is session-only. |
+| `straight-overview-pinned-file` | `nil` | File where pins are saved, as an `.eld` alist of `(name . commit)`. `nil` keeps pins until Emacs exits. |
 
-The overview opens in the **selected window** by default. Because it is shown
-via `display-buffer`, you can place it anywhere with `display-buffer-alist`,
-keyed on the buffer name `*straight-overview*`. For example, to open it in a
-side window at the bottom:
+The overview opens in the selected window. It is shown through
+`display-buffer`, so `display-buffer-alist` can place it elsewhere; the buffer
+is named `*straight-overview*`. For example, to open it in a side window at
+the bottom:
 
 ```elisp
 (add-to-list 'display-buffer-alist
@@ -141,65 +197,33 @@ side window at the bottom:
                (side . bottom) (window-height . 0.4)))
 ```
 
-## Notes & limitations
+## Limitations
 
-- **"Latest stable" vs "unstable".** straight has no stable/unstable concept —
-  it tracks one branch. The **Behind** column reflects that branch's tip; the
-  **Tag** column shows `git describe --tags` as the closest stand-in for a
-  stable release (blank for untagged packages).
-- **Fetch skips straight's repository checks.** <kbd>G</kbd> runs
-  `git fetch <remote>` directly instead of `straight-fetch-all`, which first
-  checks each repository (remote URLs, uncommitted changes, a merge in
-  progress, the checked-out branch) and asks how to proceed when one fails.
-  A fetch only updates remote refs, so those checks are not needed for it.
-  Pulling with <kbd>x</kbd> still goes through `straight-pull-package` and its
-  checks.
-- **The dependency check reads version headers.** <kbd>x</kbd> reads each
-  marked package's `Package-Requires` (or its `-pkg.el`) at the upstream tip,
-  and each dependency's `Version` header: at the upstream tip if the
-  dependency lives in the same repository, otherwise at HEAD, after the
-  marked packages it needs have been pulled. A dependency that declares no
-  version counts as met. Built-in packages and Emacs itself are checked with
-  `package-built-in-p`.
-- **Credentials are asked for at the end, one repository at a time.** The
-  parallel fetches cannot prompt: a remote that asks for a username,
-  password or passphrase fails instead of waiting. Git runs in the C locale,
-  so the package recognizes these failures from git's untranslated messages.
-  When the last fetch ends and `straight-display-subprocess-prompts` is
-  non-nil (the straight option that lets git ask you for credentials), the
-  package asks whether to enter them, then fetches those repositories again
-  one after another, reading each prompt in the minibuffer. When the option
-  is nil (straight's default), the banner lists those repositories instead.
-  Credentials stored in a git credential helper, such as the macOS keychain,
-  are used without any prompt.
-- **Shallow clones.** Commit counts and changelogs assume full clones
-  (straight's default — `straight-vc-git-default-clone-depth` = `full`). If a
-  package was cloned shallow, those figures may be truncated.
-- **Restore is a hard reset.** <kbd>R</kbd> reattaches to the tracked branch and
-  runs `git reset --hard` to the pinned commit, so any uncommitted local changes
-  in that repo are discarded (straight clones are normally pristine). It asks for
-  confirmation first.
+- **No stable releases.** straight tracks one branch per package. **Behind**
+  compares with that branch's tip; **Tag** shows the nearest tag, and is
+  blank for untagged packages.
+- **Version headers are often stale.** The dependency check trusts each
+  package's `Version` header. Many packages bump it only at releases, so a
+  dependency can satisfy the header check while missing commits the
+  dependent needs, or the reverse.
+- **Shallow clones.** Commit counts and changelogs assume full clones,
+  straight's default (`straight-vc-git-default-clone-depth` is `full`). For a
+  shallow clone they can be too low.
 
-## Related packages and acknowledgements
+## Acknowledgements
 
-`straight-overview` was directly inspired by a Reddit discussion about wanting
-targeted, informed package upgrades. Credit and thanks to the projects that
-explored this space first:
+The package started from a Reddit discussion about upgrading packages
+selectively.
 
 - **[subtree-package](https://github.com/djr7C4/subtree-package)** by David J.
-  Rosenbaum — the immediate inspiration. Its package list, which highlights
-  upgradable packages and shows how far each is behind upstream as
-  `(<commits behind>; <time behind>)`, is exactly where this package's **Behind**
-  column comes from. subtree-package takes a more ambitious approach (it manages
-  packages as git subtrees vendored into your own repository); `straight-overview`
-  borrows the presentation but stays a thin UI over straight.el.
-- **[straight.el](https://github.com/radian-software/straight.el)** by
-  Radian LLC — the package manager this is built on. All the heavy lifting
-  (`straight-pull-package`, `straight-rebuild-package`,
-  the version lockfiles) is straight's; this package only adds an interface.
-- **package.el's `list-packages`** (built into Emacs) and **Dired** — the
-  dired-style marking idiom (`m`/`u`/`U`, mark-then-execute) that the upgrade and
-  pin workflow follows.
+  Rosenbaum. Its package list shows how far each package is behind upstream
+  as `(<commits behind>; <time behind>)`; the **Behind** column copies that
+  format. subtree-package vendors packages into your own repository as git
+  subtrees; `straight-overview` keeps straight.el as the package manager.
+- **[straight.el](https://github.com/radian-software/straight.el)** by Radian
+  LLC. Pulls, rebuilds and lockfiles are straight's; this package calls them.
+- **Dired** and **package.el's `list-packages`**, for the mark-then-execute
+  keys (<kbd>m</kbd>, <kbd>u</kbd>, <kbd>U</kbd>, <kbd>x</kbd>).
 
 ## Development
 
