@@ -88,6 +88,8 @@
 ;; available, but Magit is not a hard dependency.
 (declare-function magit-log-setup-buffer "magit-log"
                   (revs args files &optional locked focus))
+;; Special, so `straight-overview-changelog' binds it dynamically.
+(defvar magit-display-buffer-function)
 
 (defgroup straight-overview nil
   "Overview of straight.el packages and their upstream status."
