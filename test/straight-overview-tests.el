@@ -254,9 +254,22 @@ days after `so-test--time'."
 
 (ert-deftest straight-overview-test-version ()
   (should (equal (straight-overview--version "1.2.3") '(1 2 3)))
+  (should (equal (straight-overview--version "1.0snapshot") '(1 0 -4)))
+  ;; `package-strip-rcs-id' accepts the first, not the second.
+  (should (equal (straight-overview--version "$Revision: 1.4") '(1 4)))
+  (should-not (straight-overview--version "$Revision: 1.4 $"))
   (should-not (straight-overview--version "x.y"))
   (should-not (straight-overview--version nil))
   (should-not (straight-overview--version '(1 2))))
+
+(ert-deftest straight-overview-test-prepare-requires ()
+  ;; The rules of `lm-package-requires' and `package-desc-from-define'.
+  (should (equal (straight-overview--prepare-requires
+                  '((emacs "29.1") bare (empty) (foo "1.0" extra)))
+                 '((emacs (29 1)) (bare (0)) (empty (0)) (foo (1 0)))))
+  (should-not (straight-overview--prepare-requires nil))
+  (dolist (bad '(foo ("foo") ((foo "x.y")) ((foo 1)) (("foo" "1.0"))))
+    (should-error (straight-overview--prepare-requires bad))))
 
 (ert-deftest straight-overview-test-behind-lessp ()
   (with-temp-buffer
@@ -476,38 +489,73 @@ days after `so-test--time'."
                 "alpha"
                 :files `(("alpha.el" . ,(so-test--header
                                          "alpha" "1.2"
-                                         "((emacs \"29.1\") (foo \"1.0\") bad (bar \"x.y\") (baz))")))))
+                                         "((emacs \"29.1\") (foo \"1.0\") bare (empty))")))))
           (multi (so-test--package
                   "multi"
-                  :files '(("lisp/multi.el" . ";;; multi.el --- Test\n;; Version: 3.0\n;; Package-Requires: ((emacs \"28.1\")\n;;                    (dash \"2.19\"))\n;;; Code:\n")))))
+                  :files '(("lisp/multi.el" . ";;; multi.el --- Test\n;; Package-Version: 3.0\n;; Version: 2.0\n;; Package-Requires: ((emacs \"28.1\")\n;;                    (dash \"2.19\"))\n;;; Code:\n")))))
       (should (equal (straight-overview--package-info "alpha" dir "HEAD")
-                     '((1 2) (emacs (29 1)) (foo (1 0)) (baz (0)))))
+                     '(:version (1 2) :version-string "1.2"
+                       :requires ((emacs (29 1)) (foo (1 0)) (bare (0)) (empty (0)))
+                       :error nil)))
+      ;; Package-Version wins over Version, as in `lm-package-version'.
       (should (equal (straight-overview--package-info "multi" multi "HEAD")
-                     '((3 0) (emacs (28 1)) (dash (2 19)))))
+                     '(:version (3 0) :version-string "3.0"
+                       :requires ((emacs (28 1)) (dash (2 19)))
+                       :error nil)))
       (should-not (straight-overview--package-info "missing" dir "HEAD"))
       (should-not (straight-overview--package-info "alpha" dir "no-such-rev")))))
+
+(ert-deftest straight-overview-test-package-info-invalid ()
+  (so-test-with-env
+    (dolist (case '(("bad-version" "x.y" "((emacs \"29.1\"))" nil)
+                    ("bad-min" "1.0" "((foo \"x.y\"))" t)
+                    ("bad-string" "1.0" "(\"foo\")" t)
+                    ("bad-form" "1.0" "foo" t)
+                    ("bad-read" "1.0" "((foo \"1.0\")" t)))
+      (pcase-let* ((`(,name ,version ,requires ,error) case)
+                   (dir (so-test--package
+                         name :files `((,(concat name ".el")
+                                        . ,(so-test--header name version requires)))))
+                   (info (straight-overview--package-info name dir "HEAD")))
+        (should (equal (plist-get info :version-string) version))
+        (should (eq (and (plist-get info :error) t) error))
+        (when error (should-not (plist-get info :requires)))))
+    (should-not (plist-get (straight-overview--package-info
+                            "bad-version" (straight--repos-dir "bad-version") "HEAD")
+                           :version))))
 
 (ert-deftest straight-overview-test-package-info-pkg-file ()
   (so-test-with-env
     (let ((dir (so-test--package
                 "alpha"
                 :files `(("alpha.el" . ,(so-test--header "alpha" "1.0" "((emacs \"24.1\"))"))
-                         ("alpha-pkg.el" . "(define-package \"alpha\" \"2.0\" \"Doc.\"\n  '((emacs \"28.1\") (seq \"2.24\")))\n")))))
+                         ("alpha-pkg.el" . "(define-package \"alpha\" \"2.0\" \"Doc.\"\n  '((emacs \"28.1\") (seq \"2.24\")))\n"))))
+          (bad (so-test--package
+                "bad" :files '(("bad-pkg.el" . "(provide 'bad)\n")))))
       (should (equal (straight-overview--package-info "alpha" dir "HEAD")
-                     '((2 0) (emacs (28 1)) (seq (2 24))))))))
+                     '(:version (2 0) :version-string "2.0"
+                       :requires ((emacs (28 1)) (seq (2 24))) :error nil)))
+      (should (string-match-p "define-package"
+                              (plist-get (straight-overview--package-info "bad" bad "HEAD")
+                                         :error))))))
 
 (ert-deftest straight-overview-test-package-info-no-version ()
+  ;; As in `package-vc': no version header is version 0.
   (so-test-with-env
     (let ((dir (so-test--package
                 "alpha" :files `(("alpha.el" . ,(so-test--header "alpha" nil))))))
-      (should (equal (straight-overview--package-info "alpha" dir "HEAD") '(nil))))))
+      (should (equal (straight-overview--package-info "alpha" dir "HEAD")
+                     '(:version (0) :version-string nil :requires nil :error nil))))))
 
 (ert-deftest straight-overview-test-package-info-at-rev ()
   (so-test-with-env
     (let ((dir (so-test--package "alpha")))
       (so-test--advance "alpha" 1 `(("alpha.el" . ,(so-test--header "alpha" "2.0"))))
-      (should (equal (car (straight-overview--package-info "alpha" dir "HEAD")) '(1 0)))
-      (should (equal (car (straight-overview--package-info "alpha" dir "origin/main"))
+      (should (equal (plist-get (straight-overview--package-info "alpha" dir "HEAD")
+                                :version)
+                     '(1 0)))
+      (should (equal (plist-get (straight-overview--package-info "alpha" dir "origin/main")
+                                :version)
                      '(2 0))))))
 
 (defun so-test--deps-fixture ()
@@ -539,12 +587,40 @@ days after `so-test--time'."
                        (no-such-package (1) "not installed")))))))
 
 (ert-deftest straight-overview-test-unmet-no-version ()
+  ;; As in `package-vc': no version header, or no main file, is version 0.
   (so-test-with-env
     (so-test--package "lib" :files `(("lib.el" . ,(so-test--header "lib" nil))))
+    (so-test--package "nofile" :files '(("README" . "x")))
     (so-test--package "app")
     (with-temp-buffer
       (setq-local straight-overview--records (straight-overview--collect))
-      (should-not (straight-overview--unmet "app" '((lib (5 0))))))))
+      (should (equal (straight-overview--unmet "app" '((lib (5 0)) (nofile (1))))
+                     '((lib (5 0) "no version header") (nofile (1) "no version header"))))
+      (should-not (straight-overview--unmet "app" '((lib (0)) (nofile (0))))))))
+
+(ert-deftest straight-overview-test-unmet-invalid-version ()
+  ;; A version header that is not a version never meets a requirement.
+  (so-test-with-env
+    (so-test--package "lib" :files `(("lib.el" . ,(so-test--header "lib" "x.y"))))
+    (so-test--package "app")
+    (with-temp-buffer
+      (setq-local straight-overview--records (straight-overview--collect))
+      (should (equal (straight-overview--unmet "app" '((lib (0))))
+                     '((lib (0) "invalid version \"x.y\"")))))))
+
+(ert-deftest straight-overview-test-requires-errors ()
+  ;; Where package.el would refuse to install the package.
+  (so-test-with-env
+    (so-test--package "badver" :files `(("badver.el" . ,(so-test--header "badver" "x.y"))))
+    (so-test--package "badreq" :files `(("badreq.el" . ,(so-test--header
+                                                          "badreq" "1.0" "((foo \"x.y\"))"))))
+    (so-test--package "nover" :files `(("nover.el" . ,(so-test--header "nover" nil "(bare)"))))
+    (with-temp-buffer
+      (setq-local straight-overview--records (straight-overview--collect))
+      (should (equal (cadr (should-error (straight-overview--requires "badver")))
+                     "Invalid version header \"x.y\""))
+      (should-error (straight-overview--requires "badreq"))
+      (should (equal (straight-overview--requires "nover") '((bare (0))))))))
 
 (ert-deftest straight-overview-test-unmet-same-repo ()
   ;; A dependency in the package's own repo is read at the upstream tip.
@@ -810,6 +886,41 @@ mocked pull fast-forwards the package's clone."
                        '((straight-overview
                           . "app was not pulled; it requires lib 2.0 (installed: 1.0)")))))
       (should (plist-get (so-test--record "app") :outdated)))))
+
+(ert-deftest straight-overview-test-execute-skips-unreadable ()
+  (so-test-with-env
+    (so-test--package "alpha")
+    (so-test--advance "alpha" 1 `(("alpha.el" . ,(so-test--header
+                                                  "alpha" "1.1" "((foo \"x.y\"))"))))
+    (so-test--package "beta")
+    (so-test--advance "beta" 1)
+    (with-current-buffer (so-test--open)
+      (straight-overview-mark-outdated)
+      (let (warnings)
+        (cl-letf (((symbol-function 'display-warning)
+                   (lambda (_type message &rest _) (push message warnings))))
+          (so-test-with-pull pulled _rebuilt
+            (straight-overview-execute)
+            (should (equal pulled '("beta")))))
+        (should (equal (length warnings) 1))
+        (should (string-prefix-p "alpha was not pulled; its package header cannot be read: "
+                                 (car warnings)))))))
+
+(ert-deftest straight-overview-test-execute-bare-requirement ()
+  ;; A bare symbol in Package-Requires still requires the package.
+  (so-test-with-env
+    (so-test--package "app")
+    (so-test--advance "app" 1 `(("app.el" . ,(so-test--header "app" "1.1" "(no-such-package)"))))
+    (with-current-buffer (so-test--open)
+      (straight-overview-mark-outdated)
+      (let (warnings)
+        (cl-letf (((symbol-function 'display-warning)
+                   (lambda (_type message &rest _) (push message warnings))))
+          (so-test-with-pull pulled _rebuilt
+            (straight-overview-execute)
+            (should-not pulled)))
+        (should (equal warnings
+                       '("app was not pulled; it requires no-such-package 0 (installed: not installed)")))))))
 
 (ert-deftest straight-overview-test-execute-rebuild ()
   (so-test-with-env

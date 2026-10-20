@@ -1029,52 +1029,85 @@ Prefers NAME-pkg.el, then NAME.el, wherever they sit in the tree."
                       (and text (cons path text))))))
 
 (defun straight-overview--version (string)
-  "Return STRING as a version list, or nil if it is not a version."
-  (and (stringp string) (ignore-errors (version-to-list string))))
+  "Return the version list of STRING, a version header, or nil.
+nil when STRING is not a version, as for `package-strip-rcs-id'."
+  (and (stringp string)
+       (ignore-errors (version-to-list (package-strip-rcs-id string)))))
+
+(defun straight-overview--prepare-requires (reqs)
+  "Return REQS, read from `Package-Requires', as (PACKAGE MIN-VERSION) lists.
+As in `lm-package-requires' and `package-desc-from-define', a bare
+PACKAGE or (PACKAGE) requires version 0, and MIN-VERSION becomes a
+version list.  Signal an error where package.el does."
+  (unless (listp reqs)
+    (error "Invalid requirement specifier: %S" reqs))
+  (mapcar (lambda (req)
+            (pcase req
+              ((pred symbolp) (list req '(0)))
+              (`(,(and dep (pred symbolp))) (list dep '(0)))
+              (`(,(and dep (pred symbolp)) ,(and min (pred stringp)) . ,_)
+               (list dep (version-to-list min)))
+              (_ (error "Invalid requirement specifier: %S" req))))
+          reqs))
 
 (defun straight-overview--package-info (name dir rev)
-  "Return (VERSION . REQUIRES) for package NAME at REV in DIR, or nil.
-VERSION is a version list, nil when the package declares none.  REQUIRES
-lists (PACKAGE MIN-VERSION) from `Package-Requires' or the
-`define-package' form, MIN-VERSION being a version list."
+  "Return the version and requirements of package NAME at REV in DIR.
+The value is a plist, or nil when the main file is not found:
+:version-string is the `Package-Version' or `Version' header, or the
+version in NAME-pkg.el; :version is its version list, (0) when there is
+no header (as in `package-vc'), nil when the header is not a version;
+:requires lists (PACKAGE MIN-VERSION) from `Package-Requires' or the
+`define-package' form; :error is the message when those cannot be read."
   (pcase (straight-overview--main-file name dir rev)
     (`(,path . ,text)
      (with-temp-buffer
        (insert text)
        (goto-char (point-min))
-       (pcase-let ((`(,version . ,reqs)
-                    (ignore-errors
-                      (if (string-suffix-p "-pkg.el" path)
-                          (let* ((form (read (current-buffer)))
-                                 (reqs (nth 4 form)))
-                            (cons (nth 2 form)
-                                  (if (eq (car-safe reqs) 'quote) (cadr reqs) reqs)))
-                        (cons (or (lm-header "package-version") (lm-header "version"))
-                              (let ((lines (lm-header-multiline "package-requires")))
-                                (and lines
-                                     (car (read-from-string
-                                           (string-join lines " "))))))))))
-         (cons (straight-overview--version version)
-               (delq nil (mapcar
-                          (lambda (req)
-                            (let ((min (straight-overview--version
-                                        (or (car-safe (cdr-safe req)) "0"))))
-                              (and (consp req) (symbolp (car req)) min
-                                   (list (car req) min))))
-                          (and (listp reqs) reqs)))))))))
+       (let (header reqs err)
+         (condition-case e
+             (progn
+               (if (string-suffix-p "-pkg.el" path)
+                   (let ((form (read (current-buffer))))
+                     (unless (eq (car-safe form) 'define-package)
+                       (error "No `define-package' form in %s" path))
+                     (setq header (nth 2 form)
+                           reqs (nth 4 form))
+                     (when (eq (car-safe reqs) 'quote)
+                       (setq reqs (cadr reqs))))
+                 (setq header (or (lm-header "package-version") (lm-header "version")))
+                 (let ((lines (lm-header-multiline "package-requires")))
+                   (when lines
+                     (setq reqs (car (read-from-string (string-join lines " ")))))))
+               (setq reqs (straight-overview--prepare-requires reqs)))
+           (error (setq err (error-message-string e)
+                        reqs nil)))
+         (list :version (if header (straight-overview--version header) '(0))
+               :version-string header
+               :requires reqs
+               :error err))))))
 
 (defun straight-overview--requires (name)
-  "Return the (PACKAGE MIN-VERSION) requirements of NAME at its upstream tip."
-  (let ((rec (straight-overview--find-record name)))
-    (cdr (straight-overview--package-info
-          name (plist-get rec :dir) (or (plist-get rec :upstream) "HEAD")))))
+  "Return the (PACKAGE MIN-VERSION) requirements of NAME at its upstream tip.
+Signal an error where package.el would refuse to install NAME: when its
+requirements cannot be read, or its version header is not a version."
+  (let* ((rec (straight-overview--find-record name))
+         (info (straight-overview--package-info
+                name (plist-get rec :dir) (or (plist-get rec :upstream) "HEAD"))))
+    (cond
+     ((plist-get info :error)
+      (error "%s" (plist-get info :error)))
+     ((and info (null (plist-get info :version)))
+      (error "Invalid version header %S" (plist-get info :version-string))))
+    (plist-get info :requires)))
 
 (defun straight-overview--unmet (name reqs)
   "Return the requirements in REQS that package NAME would pull without.
 REQS is from `straight-overview--requires'.  Each element is
 \(PACKAGE MIN-VERSION HAVE), HAVE describing what is installed.  A
 dependency in NAME's own repo is read at the upstream tip, any other at
-HEAD.  A dependency that declares no version counts as met."
+HEAD.  As in `package-vc', a dependency without a version header, or
+without a main file, has version 0.  A version header that is not a
+version never meets a requirement."
   (let* ((rec (straight-overview--find-record name))
          (dir (plist-get rec :dir))
          (upstream (or (plist-get rec :upstream) "HEAD"))
@@ -1085,11 +1118,15 @@ HEAD.  A dependency that declares no version counts as met."
              (have
               (cond
                (dep-rec
-                (let ((version (car (straight-overview--package-info
-                                     (symbol-name dep) dep-dir
-                                     (if (equal dep-dir dir) upstream "HEAD")))))
-                  (and version (version-list-< version min)
-                       (package-version-join version))))
+                (let* ((info (straight-overview--package-info
+                              (symbol-name dep) dep-dir
+                              (if (equal dep-dir dir) upstream "HEAD")))
+                       (version (if info (plist-get info :version) '(0)))
+                       (header (plist-get info :version-string)))
+                  (cond ((null version) (format "invalid version %S" header))
+                        ((not (version-list-< version min)) nil)
+                        (header (package-version-join version))
+                        (t "no version header"))))
                ((package-built-in-p dep min) nil)
                ((eq dep 'emacs) emacs-version)
                ((package-built-in-p dep) "older built-in")
@@ -1143,7 +1180,8 @@ whose repo holds one of NAME's requirements."
 Each package is pulled after the marked packages it depends on.  A
 package whose `Package-Requires' at the upstream tip names a dependency
 that is not installed, or older than required, is skipped with a
-warning."
+warning.  The rules are package.el's: a package whose header package.el
+could not read is skipped too."
   (interactive)
   (let ((names (straight-overview--marked)))
     (if (null names)
@@ -1152,10 +1190,17 @@ warning."
              (format "Pull %d package(s)%s? "
                      (length names)
                      (if straight-overview-build-on-pull " and rebuild" "")))
-        (let ((reqs (mapcar (lambda (name)
-                              (cons name (straight-overview--requires name)))
-                            names))
-              (skipped 0))
+        (let (reqs (skipped 0))
+          (dolist (name names)
+            (condition-case err
+                (push (cons name (straight-overview--requires name)) reqs)
+              (error
+               (cl-incf skipped)
+               (display-warning
+                'straight-overview
+                (format "%s was not pulled; its package header cannot be read: %s"
+                        name (error-message-string err))))))
+          (setq reqs (nreverse reqs))
           (dolist (name (straight-overview--pull-order reqs))
             (let ((unmet (straight-overview--unmet name (cdr (assoc name reqs)))))
               (if unmet
