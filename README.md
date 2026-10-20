@@ -201,6 +201,13 @@ explored this space first:
   dired-style marking idiom (`m`/`u`/`U`, mark-then-execute) that the upgrade and
   pin workflow follows.
 
+## Development
+
+`make test` runs the ERT tests in `test/straight-overview-tests.el` in a
+batch Emacs. The tests create git repositories in a temporary directory and
+stub straight.el when it is not on the `load-path`, so they need only Emacs
+and git. `make lint` runs `check-parens` and `checkdoc`.
+
 ## License
 
 [GNU General Public License v3.0 or later](LICENSE).
