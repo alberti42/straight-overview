@@ -14,10 +14,11 @@ jobs:
     # A failure on the development version of Emacs does not fail the run.
     continue-on-error: ${{ matrix.emacs == 'snapshot' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: purcell/setup-emacs@master
         with:
           version: ${{ matrix.emacs }}
       - run: git --version
       - run: make lint
+      - run: make compile
       - run: make test

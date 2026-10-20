@@ -1,5 +1,10 @@
 # straight-overview
 
+![Made for GNU Emacs](https://img.shields.io/badge/Made%20for-GNU%20Emacs-7F5AB6?logo=gnuemacs&logoColor=white)
+[![melpazoid](https://github.com/alberti42/straight-overview/actions/workflows/melpazoid.yml/badge.svg)](https://github.com/alberti42/straight-overview/actions/workflows/melpazoid.yml)
+[![CI](https://github.com/alberti42/straight-overview/actions/workflows/test.yml/badge.svg)](https://github.com/alberti42/straight-overview/actions/workflows/test.yml)
+[![License: GPL v3+](https://img.shields.io/github/license/alberti42/straight-overview)](LICENSE)
+
 An Emacs package for upgrading [straight.el](https://github.com/radian-software/straight.el)
 packages one by one instead of all at once.
 
@@ -249,9 +254,13 @@ selectively.
 `make test` runs the ERT tests in `test/straight-overview-tests.el` in a
 batch Emacs. The tests create git repositories in a temporary directory and
 stub straight.el when it is not on the `load-path`, so they need only Emacs
-and git. `make lint` runs `check-parens` and `checkdoc`, and fails on any
-checkdoc warning. GitHub Actions runs both on every push and pull request,
-on Emacs 29.1, 29.4, 30.1 and the development snapshot.
+and git. `make lint` runs `check-parens`, `checkdoc` and `check-declare`,
+and fails on any checkdoc warning. `make compile` byte-compiles the package
+without straight.el or Magit on the `load-path`, with warnings as errors.
+GitHub Actions runs all three on every push and pull request, on Emacs
+29.1, 29.4, 30.1 and the development snapshot, and runs
+[melpazoid](https://github.com/riscy/melpazoid), the checks MELPA's
+reviewers run, on every push to `main`.
 
 ## License
 
