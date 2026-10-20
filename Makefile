@@ -7,9 +7,11 @@ test:
 	  -f ert-run-tests-batch-and-exit
 
 # checkdoc exits 0 even when it warns, so any warning line fails the target.
+# The verb check is on in Emacs 29 and 30 and off in later versions; it is
+# turned on here so that every version runs the same checks.
 lint:
 	$(EMACS) --batch -Q --eval '(with-temp-buffer (insert-file-contents "straight-overview.el") (emacs-lisp-mode) (check-parens) (message "check-parens: OK"))'
-	@out=$$($(EMACS) --batch -Q --eval '(progn (require (quote checkdoc)) (checkdoc-file "straight-overview.el"))' 2>&1); \
+	@out=$$($(EMACS) --batch -Q --eval '(progn (require (quote checkdoc)) (setq checkdoc-verb-check-experimental-flag t) (checkdoc-file "straight-overview.el"))' 2>&1); \
 	  echo "$$out"; \
 	  ! echo "$$out" | grep -q '^straight-overview\.el:'
 	$(EMACS) --batch -Q --eval '(progn (require (quote check-declare)) (when (check-declare-file "straight-overview.el") (kill-emacs 1)) (message "check-declare: OK"))'

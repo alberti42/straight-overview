@@ -280,7 +280,7 @@ TIMEOUT seconds.  ENV is the `process-environment' the jobs run with."
   on-progress on-done)
 
 (cl-defun straight-overview--pool-start (jobs &key width timeout on-progress on-done)
-  "Start the git calls JOBS in parallel and return the pool.
+  "Start the git processes for JOBS in parallel and return the pool.
 Each job is (DIR . ARGS).  At most WIDTH processes run at once (default
 `straight-overview-jobs'); a finished process hands its slot to the next
 job in the queue.  A process still running after TIMEOUT seconds is stopped and
@@ -387,7 +387,7 @@ Neither callback of POOL runs afterwards."
   (setf (straight-overview--pool-procs pool) nil))
 
 (defun straight-overview--git-batch (jobs)
-  "Run the git calls JOBS in parallel, wait, and return their results.
+  "Run the git processes for JOBS in parallel, wait, and return their results.
 JOBS and the results are as for `straight-overview--pool-start'; the
 results come back as a list in the order of JOBS."
   (let ((pool (straight-overview--pool-start jobs)))
@@ -498,7 +498,7 @@ nil when the package is not a git clone."
                 (straight-overview--repo-refs repo)))))
 
 (defun straight-overview--fallbacks (repo ahead-behind)
-  "Return (SLOT . JOB) pairs for the git calls REPO still needs.
+  "Return (SLOT . JOB) pairs for the git commands REPO still needs.
 A detached HEAD needs `log -1 HEAD'; git before 2.41 (AHEAD-BEHIND nil)
 needs `rev-list --count'.  SLOT names the REPO field for the result."
   (let ((dir (straight-overview--repo-dir repo))
@@ -706,7 +706,7 @@ it survives `tabulated-list-print' and never carries a row id."
           (straight-overview--draw-banner))))))
 
 (defun straight-overview--render ()
-  "Repaint the list from cached records, preserving marks."
+  "Repaint the list from cached records; marked packages stay marked."
   (setq tabulated-list-entries (straight-overview--entries))
   (tabulated-list-print t)
   (straight-overview--redraw-marks)
@@ -813,7 +813,7 @@ are in English."
         (quit (delete-process proc))))))
 
 (defun straight-overview--fetch-with-prompts (repo)
-  "Fetch REPO on a pty, answering its prompts in the minibuffer.
+  "Fetch REPO on a pty, answering each prompt in the minibuffer.
 Return non-nil if the fetch succeeded."
   (let* ((default-directory (file-name-as-directory
                              (straight-overview--repo-dir repo)))
@@ -920,7 +920,7 @@ Pinned packages cannot be marked."
   (forward-line 1))
 
 (defun straight-overview-unmark-all ()
-  "Remove all marks."
+  "Unmark all packages."
   (interactive)
   (clrhash straight-overview--marks)
   (straight-overview--redraw-marks))
