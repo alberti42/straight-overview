@@ -15,6 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   package whose `Package-Requires` at the upstream tip names a dependency
   that is not installed, or older than required, is skipped with a warning.
 
+### Fixed
+
+- With Magit, <kbd>c</kbd> reuses a visible changelog window also when
+  `straight-overview.el` is byte-compiled. Compiled without Magit loaded,
+  the binding of `magit-display-buffer-function` was lexical, so each
+  changelog opened a new window.
+- Every overview buffer starts sorted by package name. After a reversed
+  sort, overview buffers created later in the session started in reverse
+  order.
+
 ## [0.1.0] - 2026-10-04
 
 First release.
