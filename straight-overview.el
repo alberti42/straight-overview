@@ -1057,7 +1057,7 @@ lists (PACKAGE MIN-VERSION) from `Package-Requires' or the
                           (lambda (req)
                             (let ((min (straight-overview--version
                                         (or (car-safe (cdr-safe req)) "0"))))
-                              (and (symbolp (car-safe req)) min
+                              (and (consp req) (symbolp (car req)) min
                                    (list (car req) min))))
                           (and (listp reqs) reqs)))))))))
 
