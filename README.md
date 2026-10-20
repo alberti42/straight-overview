@@ -249,7 +249,9 @@ selectively.
 `make test` runs the ERT tests in `test/straight-overview-tests.el` in a
 batch Emacs. The tests create git repositories in a temporary directory and
 stub straight.el when it is not on the `load-path`, so they need only Emacs
-and git. `make lint` runs `check-parens` and `checkdoc`.
+and git. `make lint` runs `check-parens` and `checkdoc`, and fails on any
+checkdoc warning. GitHub Actions runs both on every push and pull request,
+on Emacs 29.1, 29.4, 30.1 and the development snapshot.
 
 ## License
 

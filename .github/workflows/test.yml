@@ -1,0 +1,23 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        emacs: ['29.1', '29.4', '30.1', 'snapshot']
+    # A failure on the development version of Emacs does not fail the run.
+    continue-on-error: ${{ matrix.emacs == 'snapshot' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: purcell/setup-emacs@master
+        with:
+          version: ${{ matrix.emacs }}
+      - run: git --version
+      - run: make lint
+      - run: make test
