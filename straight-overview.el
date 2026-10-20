@@ -1279,7 +1279,8 @@ actionable (RET to inspect it, etc.); otherwise fall back to a plain
     (hl-line-mode 1))
   (setq tabulated-list-padding 2)
   (setq tabulated-list-printer #'straight-overview--print-entry)
-  (setq tabulated-list-sort-key '("Package" . nil))
+  ;; A fresh cons: `tabulated-list-sort' reverses the order with `setcdr'.
+  (setq tabulated-list-sort-key (cons "Package" nil))
   (setq straight-overview--marks (make-hash-table :test #'equal))
   (setq straight-overview--show straight-overview-show)
   (tabulated-list-init-header))
