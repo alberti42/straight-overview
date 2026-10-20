@@ -54,6 +54,7 @@
 ;;   M   mark all outdated        a   toggle outdated-only / all
 ;;   g   re-scan (local, no fetch)
 ;;   G   fetch all remotes in the background, then re-scan
+;;   X   pull marked, also those whose dependencies are not met
 ;;
 ;; Packages can also be pinned (held), which marks them in the Pin column,
 ;; fades the row, and makes them un-markable:
@@ -1175,46 +1176,53 @@ whose repo holds one of NAME's requirements."
   (< (straight-overview--behind-secs (car a))
      (straight-overview--behind-secs (car b))))
 
-(defun straight-overview-execute ()
+(defun straight-overview-execute (&optional force)
   "Pull every marked package, optionally rebuilding, then refresh.
 Each package is pulled after the marked packages it depends on.  A
 package whose `Package-Requires' at the upstream tip names a dependency
 that is not installed, or older than required, is skipped with a
 warning.  The rules are package.el's: a package whose header package.el
-could not read is skipped too."
-  (interactive)
+could not read is skipped too.
+
+With prefix argument FORCE, those packages are pulled anyway, each with
+a warning naming what was not met."
+  (interactive "P")
   (let ((names (straight-overview--marked)))
     (if (null names)
         (message "No packages marked")
       (when (yes-or-no-p
-             (format "Pull %d package(s)%s? "
+             (format "Pull %d package(s)%s%s? "
                      (length names)
-                     (if straight-overview-build-on-pull " and rebuild" "")))
-        (let (reqs (skipped 0))
+                     (if straight-overview-build-on-pull " and rebuild" "")
+                     (if force ", ignoring unmet dependencies" "")))
+        (let ((verb (if force "was pulled although" "was not pulled;"))
+              reqs (skipped 0))
           (dolist (name names)
             (condition-case err
                 (push (cons name (straight-overview--requires name)) reqs)
               (error
-               (cl-incf skipped)
+               (if force
+                   (push (list name) reqs)
+                 (cl-incf skipped))
                (display-warning
                 'straight-overview
-                (format "%s was not pulled; its package header cannot be read: %s"
-                        name (error-message-string err))))))
+                (format "%s %s its package header cannot be read: %s"
+                        name verb (error-message-string err))))))
           (setq reqs (nreverse reqs))
           (dolist (name (straight-overview--pull-order reqs))
             (let ((unmet (straight-overview--unmet name (cdr (assoc name reqs)))))
-              (if unmet
-                  (progn
-                    (cl-incf skipped)
-                    (display-warning
-                     'straight-overview
-                     (format "%s was not pulled; it requires %s"
-                             name
-                             (mapconcat
-                              (pcase-lambda (`(,dep ,min ,have))
-                                (format "%s %s (installed: %s)"
-                                        dep (package-version-join min) have))
-                              unmet ", "))))
+              (when unmet
+                (display-warning
+                 'straight-overview
+                 (format "%s %s it requires %s"
+                         name verb
+                         (mapconcat
+                          (pcase-lambda (`(,dep ,min ,have))
+                            (format "%s %s (installed: %s)"
+                                    dep (package-version-join min) have))
+                          unmet ", "))))
+              (if (and unmet (not force))
+                  (cl-incf skipped)
                 (message "straight-overview: pulling %s..." name)
                 (when (straight-pull-package name)
                   (when straight-overview-build-on-pull
@@ -1225,6 +1233,12 @@ could not read is skipped too."
           (message "straight-overview: done%s"
                    (if (zerop skipped) ""
                      (format "; %d skipped, see *Warnings*" skipped))))))))
+
+(defun straight-overview-execute-force ()
+  "Pull every marked package, also those whose dependencies are not met.
+Like `straight-overview-execute' with a prefix argument."
+  (interactive)
+  (straight-overview-execute t))
 
 (defun straight-overview-browse ()
   "Open the remote URL of the package at point in a browser."
@@ -1301,6 +1315,7 @@ actionable (RET to inspect it, etc.); otherwise fall back to a plain
   "U"   #'straight-overview-unmark-all
   "M"   #'straight-overview-mark-outdated
   "x"   #'straight-overview-execute
+  "X"   #'straight-overview-execute-force
   "P"   #'straight-overview-pin
   "F"   #'straight-overview-unpin
   "R"   #'straight-overview-restore

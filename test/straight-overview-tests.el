@@ -922,6 +922,43 @@ mocked pull fast-forwards the package's clone."
         (should (equal warnings
                        '("app was not pulled; it requires no-such-package 0 (installed: not installed)")))))))
 
+(ert-deftest straight-overview-test-execute-force ()
+  ;; X pulls what x skips, in dependency order, and warns.
+  (so-test-with-env
+    (so-test--deps-fixture)
+    (so-test--package "broken")
+    (so-test--advance "broken" 1 `(("broken.el" . ,(so-test--header
+                                                    "broken" "x.y"))))
+    (with-current-buffer (so-test--open)
+      (dolist (name '("app" "broken"))
+        (so-test--goto name)
+        (straight-overview-mark))
+      (let (warnings prompt)
+        (cl-letf (((symbol-function 'display-warning)
+                   (lambda (_type message &rest _) (push message warnings))))
+          (so-test-with-pull pulled _rebuilt
+            (cl-letf (((symbol-function 'yes-or-no-p)
+                       (lambda (p) (setq prompt p) t)))
+              (straight-overview-execute-force))
+            (should (equal pulled '("app" "broken")))))
+        (should (equal prompt "Pull 2 package(s), ignoring unmet dependencies? "))
+        (should (equal (sort warnings #'string<)
+                       '("app was pulled although it requires lib 2.0 (installed: 1.0)"
+                         "broken was pulled although its package header cannot be read: Invalid version header \"x.y\""))))
+      (should-not (plist-get (so-test--record "app") :outdated)))))
+
+(ert-deftest straight-overview-test-execute-prefix-forces ()
+  (so-test-with-env
+    (so-test--deps-fixture)
+    (with-current-buffer (so-test--open)
+      (so-test--goto "app")
+      (straight-overview-mark)
+      (cl-letf (((symbol-function 'display-warning) #'ignore))
+        (so-test-with-pull pulled _rebuilt
+          (let ((current-prefix-arg '(4)))
+            (call-interactively #'straight-overview-execute))
+          (should (equal pulled '("app"))))))))
+
 (ert-deftest straight-overview-test-execute-rebuild ()
   (so-test-with-env
     (so-test--three-packages)
@@ -1205,7 +1242,9 @@ mocked pull fast-forwards the package's clone."
   (dolist (binding '(("m" . straight-overview-mark) ("u" . straight-overview-unmark)
                      ("U" . straight-overview-unmark-all)
                      ("M" . straight-overview-mark-outdated)
-                     ("x" . straight-overview-execute) ("P" . straight-overview-pin)
+                     ("x" . straight-overview-execute)
+                     ("X" . straight-overview-execute-force)
+                     ("P" . straight-overview-pin)
                      ("F" . straight-overview-unpin) ("R" . straight-overview-restore)
                      ("c" . straight-overview-changelog) ("o" . straight-overview-browse)
                      ("RET" . straight-overview-browse)
