@@ -1,7 +1,10 @@
 # straight-overview
 
-A read-only overview and **selective-upgrade UI** for packages managed by
+A overview and **selective-upgrade UI** for packages managed by
 [straight.el](https://github.com/radian-software/straight.el).
+
+Disclosure: Written with AI assistance (Claude). Every change is reviewed
+and tested by the author, and design decisions are the author's.
 
 `straight-pull-all` is all-or-nothing. `straight-overview` answers a different
 question — *which* of my packages have newer commits upstream, and *how far*
