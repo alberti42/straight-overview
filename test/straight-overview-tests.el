@@ -1028,5 +1028,306 @@ mocked pull fast-forwards the package's clone."
           (straight-overview-browse))
         (should (equal urls '("https://github.com/user/alpha")))))))
 
+;;; Mechanisms named in the commit history
+
+(ert-deftest straight-overview-test-pool-default-width ()
+  (let ((straight-overview-jobs nil))
+    (should (= (straight-overview--pool-width (straight-overview--pool-start nil))
+               (num-processors))))
+  (let ((straight-overview-jobs 3))
+    (should (= (straight-overview--pool-width (straight-overview--pool-start nil)) 3))
+    (should (= (straight-overview--pool-width (straight-overview--pool-start nil :width 0))
+               1))))
+
+(ert-deftest straight-overview-test-git-batch-quit ()
+  ;; C-g while waiting deletes the processes still running.
+  (so-test-with-env
+    (let ((start (symbol-function 'straight-overview--pool-start))
+          pool procs)
+      (cl-letf (((symbol-function 'straight-overview--pool-start)
+                 (lambda (&rest args) (setq pool (apply start args))))
+                ((symbol-function 'accept-process-output)
+                 (lambda (&rest _)
+                   (setq procs (straight-overview--pool-procs pool))
+                   (signal 'quit nil))))
+        (should (eq (condition-case nil
+                        (straight-overview--git-batch
+                         (make-list 2 (list so-test--root "-c" "alias.slow=!sleep 5" "slow")))
+                      (quit 'quit))
+                    'quit)))
+      (should (= (length procs) 2))
+      (should-not (seq-some #'process-live-p procs))
+      (should-not (straight-overview--pool-procs pool)))))
+
+(ert-deftest straight-overview-test-collect-non-positive-time ()
+  ;; A fork whose HEAD post-dates the tracked tip.
+  (so-test-with-env
+    (so-test--package "alpha")
+    (so-test--advance "alpha" 4 nil (- so-test--time 86400))
+    (let ((rec (car (straight-overview--collect))))
+      (should (equal (plist-get rec :behind) "(4; <1d)"))
+      (should (< (plist-get rec :behind-secs) 0)))))
+
+(ert-deftest straight-overview-test-collect-remote ()
+  ;; The recipe's :remote is the one compared with.
+  (so-test-with-env
+    (let ((dir (so-test--package "alpha" :recipe '(:remote "upstream"))))
+      (so-test--git dir "remote" "rename" "origin" "upstream")
+      (so-test--commit (so-test--upstream "alpha") nil (+ so-test--time 86400))
+      (so-test--git dir "fetch" "-q" "upstream")
+      (let ((rec (car (straight-overview--collect))))
+        (should (equal (plist-get rec :remote) "upstream"))
+        (should (equal (plist-get rec :upstream) "upstream/main"))
+        (should (equal (plist-get rec :commits) 1))))))
+
+(ert-deftest straight-overview-test-format ()
+  (with-temp-buffer
+    (straight-overview-mode)
+    ;; "#" is right-aligned and not sortable; Behind sorts with a predicate.
+    (should (equal (aref tabulated-list-format 0) '("#" 4 nil :right-align t)))
+    (should (eq (nth 2 (aref tabulated-list-format 5)) #'straight-overview--behind-lessp))
+    (should (equal (mapcar #'car tabulated-list-format)
+                   '("#" "Pin" "Package" "Installed" "Branch" "Behind" "Tag" "Remote")))
+    (should (eq tabulated-list-printer #'straight-overview--print-entry))))
+
+(ert-deftest straight-overview-test-keymap ()
+  (dolist (binding '(("m" . straight-overview-mark) ("u" . straight-overview-unmark)
+                     ("U" . straight-overview-unmark-all)
+                     ("M" . straight-overview-mark-outdated)
+                     ("x" . straight-overview-execute) ("P" . straight-overview-pin)
+                     ("F" . straight-overview-unpin) ("R" . straight-overview-restore)
+                     ("c" . straight-overview-changelog) ("o" . straight-overview-browse)
+                     ("RET" . straight-overview-browse)
+                     ("a" . straight-overview-toggle-show)
+                     ("g" . straight-overview-refresh) ("G" . straight-overview-fetch)))
+    (should (eq (keymap-lookup straight-overview-mode-map (car binding)) (cdr binding)))))
+
+(ert-deftest straight-overview-test-banner-survives-sort ()
+  (so-test-with-env
+    (so-test--three-packages)
+    (with-current-buffer (so-test--open)
+      (let ((banner straight-overview--banner))
+        ;; A column sort re-prints without `straight-overview--render'.
+        (goto-char (point-min))
+        (tabulated-list-sort 2)
+        (should (eq straight-overview--banner banner))
+        (should (eq (overlay-buffer banner) (current-buffer)))
+        (should (= (overlay-start banner) (point-min)))
+        (should (string-prefix-p "2 packages" (overlay-get banner 'before-string)))
+        (should (equal (so-test--ids) '("gamma" "alpha")))
+        (goto-char (point-min))
+        (should (equal (aref (tabulated-list-get-entry) 0) "1"))))))
+
+(ert-deftest straight-overview-test-sort-key-fresh ()
+  ;; Reversing a sort does not carry over to the next overview buffer.
+  (so-test-with-env
+    (so-test--three-packages)
+    (with-current-buffer (so-test--open)
+      (goto-char (point-min))
+      (tabulated-list-sort 2)
+      (should (equal (so-test--ids) '("gamma" "alpha"))))
+    (kill-buffer "*straight-overview*")
+    (with-current-buffer (so-test--open)
+      (should (equal tabulated-list-sort-key '("Package")))
+      (should (equal (so-test--ids) '("alpha" "gamma"))))))
+
+(ert-deftest straight-overview-test-banner-height ()
+  ;; The table does not move when a fetch starts or ends.
+  (with-temp-buffer
+    (let ((straight-overview--fetch-problems nil)
+          (lines (lambda ()
+                   (cl-count ?\n (straight-overview--banner-text)))))
+      (let ((straight-overview--fetch nil))
+        (should (= (funcall lines) 3)))
+      (let ((straight-overview--fetch
+             (straight-overview--make-pool :results (make-vector 1 nil) :pending 1)))
+        (should (= (funcall lines) 3))))))
+
+(ert-deftest straight-overview-test-mark-faces ()
+  (should (eq (face-attribute 'straight-overview-mark :inherit) 'dired-mark))
+  (should (eq (face-attribute 'straight-overview-marked :inherit) 'dired-marked))
+  (so-test-with-env
+    (so-test--three-packages)
+    (with-current-buffer (so-test--open)
+      (goto-char (point-min))
+      (straight-overview-mark)
+      (let ((ov (car straight-overview--mark-overlays)))
+        (should (eq (overlay-get ov 'face) 'straight-overview-marked))
+        ;; The overlay covers the newline, so the highlight reaches the
+        ;; window edge.
+        (should (= (overlay-start ov) (point-min)))
+        (should (= (overlay-end ov) (save-excursion (goto-char (point-min))
+                                                    (line-beginning-position 2))))
+        (should (eq (get-text-property (point-min) 'face) 'straight-overview-mark))))))
+
+(ert-deftest straight-overview-test-open-selected-window ()
+  (so-test-with-env
+    (so-test--package "alpha")
+    (save-window-excursion
+      (delete-other-windows)
+      (let ((window (selected-window)))
+        (straight-overview)
+        (should (eq (window-buffer window) (get-buffer "*straight-overview*")))
+        (should (one-window-p))))
+    ;; `display-buffer-alist' decides where it goes.
+    (save-window-excursion
+      (let* (called
+             (display-buffer-alist
+              `(("\\`\\*straight-overview\\*\\'"
+                 ,(lambda (buffer alist)
+                    (setq called t)
+                    (display-buffer-same-window buffer alist))))))
+        (straight-overview)
+        (should called)))))
+
+(ert-deftest straight-overview-test-restore-rebuild ()
+  (so-test-with-env
+    (so-test--package "alpha")
+    (so-test--advance "alpha" 1)
+    (let ((straight-overview-build-on-pull t)
+          rebuilt)
+      (with-current-buffer (so-test--open)
+        (so-test--goto "alpha")
+        (straight-overview-pin)
+        (straight-overview-toggle-show)
+        (so-test--goto "alpha")
+        (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_) t))
+                  ((symbol-function 'straight-rebuild-package)
+                   (lambda (name &rest _) (push name rebuilt))))
+          (straight-overview-restore))
+        (should (equal rebuilt '("alpha")))))))
+
+(ert-deftest straight-overview-test-credentials-regexp ()
+  (dolist (err '("fatal: could not read Username for 'https://github.com': terminal prompts disabled"
+                 "fatal: could not read Password for 'https://u@github.com': No such device"
+                 "git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository."
+                 "Host key verification failed.\nfatal: Could not read from remote repository."))
+    (should (string-match-p straight-overview--credentials-regexp err)))
+  (dolist (err '("fatal: repository 'https://github.com/u/x/' not found"
+                 "fatal: unable to access 'https://x/': Could not resolve host: x"))
+    (should-not (string-match-p straight-overview--credentials-regexp err))))
+
+(ert-deftest straight-overview-test-fetch-start-arguments ()
+  (so-test-with-env
+    (so-test--package "alpha" :recipe '(:remote "upstream"))
+    (so-test--package "beta")
+    (let ((straight-overview-fetch-jobs 7)
+          (straight-overview-fetch-timeout 12)
+          call)
+      (cl-letf (((symbol-function 'straight-overview--pool-start)
+                 (lambda (jobs &rest keys)
+                   (setq call (list jobs keys process-environment))
+                   (straight-overview--make-pool :pending 0))))
+        (straight-overview--fetch-start))
+      (pcase-let ((`(,jobs ,keys ,env) call))
+        (should (equal (sort (mapcar #'cdr jobs)
+                             (lambda (a b) (string< (car (last a)) (car (last b)))))
+                       '(("fetch" "--quiet" "origin") ("fetch" "--quiet" "upstream"))))
+        (should (equal (plist-get keys :width) 7))
+        (should (equal (plist-get keys :timeout) 12))
+        (should (member "GIT_TERMINAL_PROMPT=0" env))
+        (should (equal (getenv-internal "LC_ALL" env) "C")))
+      ;; Nothing left to wait for.
+      (should-not straight-overview--fetch))))
+
+(ert-deftest straight-overview-test-fetch-timeout ()
+  (so-test-with-env
+    (let ((slow (so-test--package "slow"))
+          (straight-overview-fetch-timeout 0.5)
+          (start (float-time)))
+      (so-test--git slow "config" "remote.origin.uploadpack" "sleep 5; git-upload-pack")
+      (cl-letf (((symbol-function 'run-with-idle-timer) #'ignore))
+        (straight-overview--fetch-start)
+        (so-test--wait straight-overview--fetch))
+      (should (< (- (float-time) start) 4))
+      (should (equal (plist-get straight-overview--fetch-problems :timed-out) '("slow"))))))
+
+(ert-deftest straight-overview-test-fetch-cancel-declined ()
+  (so-test-with-env
+    (let ((pool (straight-overview--make-pool :results (make-vector 2 nil) :pending 2)))
+      (setq straight-overview--fetch pool)
+      (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) nil))
+                ((symbol-function 'straight-overview--pool-cancel)
+                 (lambda (_) (error "Should not cancel"))))
+        (straight-overview-fetch))
+      (should (eq straight-overview--fetch pool)))))
+
+(ert-deftest straight-overview-test-after-fetch-waits-for-minibuffer ()
+  (let ((straight-overview--fetch-problems nil)
+        timers)
+    (cl-letf (((symbol-function 'active-minibuffer-window) (lambda () t))
+              ((symbol-function 'run-with-idle-timer)
+               (lambda (secs _repeat fn &rest _) (push (cons secs fn) timers)))
+              ((symbol-function 'straight-overview-refresh)
+               (lambda () (error "Should not refresh"))))
+      (straight-overview--after-fetch))
+    (should (equal timers '((1 . straight-overview--after-fetch))))))
+
+(ert-deftest straight-overview-test-after-fetch-message ()
+  (let ((straight-overview--fetch-problems
+         '(:failed ("a") :timed-out ("b") :credentials ("c")))
+        messages)
+    (cl-letf (((symbol-function 'message)
+               (lambda (fmt &rest args) (push (apply #'format fmt args) messages))))
+      (straight-overview--after-fetch)
+      (should (equal (car messages)
+                     "straight-overview: fetch done; 3 did not succeed (listed in the overview)"))
+      (setq straight-overview--fetch-problems nil)
+      (straight-overview--after-fetch)
+      (should (equal (car messages) "straight-overview: fetch done")))))
+
+(ert-deftest straight-overview-test-changelog-magit ()
+  (so-test-with-env
+    (so-test--package "alpha")
+    (so-test--advance "alpha" 2)
+    ;; A stand-in Magit that only provides the feature.
+    (with-temp-file (expand-file-name "magit.el" so-test--root)
+      (insert "(provide 'magit)\n"))
+    (let ((load-path (cons so-test--root load-path))
+          (features (copy-sequence features))
+          (straight-overview-changelog-use-magit t)
+          (dead (generate-new-buffer "dead-log"))
+          (log (generate-new-buffer "log"))
+          calls)
+      (kill-buffer dead)
+      (setq straight-overview--log-buffers (list dead log))
+      (unwind-protect
+          (cl-letf (((symbol-function 'magit-log-setup-buffer)
+                     (lambda (revs args files &rest _)
+                       (push (list revs args files default-directory
+                                   (bound-and-true-p magit-display-buffer-function))
+                             calls)
+                       log)))
+            (with-current-buffer (so-test--open)
+              (so-test--goto "alpha")
+              (straight-overview-changelog))
+            (should (equal calls
+                           `((("HEAD..origin/main") ("-n256" "--decorate") nil
+                              ,(file-name-as-directory (straight--repos-dir "alpha"))
+                              straight-overview--display-log))))
+            ;; Dead buffers are dropped; the new one comes first, once.
+            (should (equal straight-overview--log-buffers (list log))))
+        (kill-buffer log)))))
+
+(ert-deftest straight-overview-test-display-log ()
+  (save-window-excursion
+    (delete-other-windows)
+    (let* ((overview (selected-window))
+           (a (generate-new-buffer "log-a"))
+           (b (generate-new-buffer "log-b"))
+           (straight-overview--log-buffers (list a)))
+      (unwind-protect
+          (let ((window (straight-overview--display-log a)))
+            ;; None visible: a new window, never the overview's.
+            (should (window-live-p window))
+            (should-not (eq window overview))
+            (should (eq (window-buffer window) a))
+            ;; A visible log window is reused.
+            (should (eq (straight-overview--display-log b) window))
+            (should (eq (window-buffer window) b))
+            (should (= (length (window-list)) 2)))
+        (kill-buffer a)
+        (kill-buffer b)))))
+
 (provide 'straight-overview-tests)
 ;;; straight-overview-tests.el ends here
