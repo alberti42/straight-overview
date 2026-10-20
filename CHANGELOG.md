@@ -7,20 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-
-- straight.el is loaded when `M-x straight-overview` runs, not when
-  `straight-overview.el` is loaded. Without straight.el installed, the
-  command signals an error. The package now loads and byte-compiles
-  without straight.el, which is not on a package archive.
-- A pins file that does not hold a list of `(PACKAGE . COMMIT)` is ignored
-  with a warning. It was ignored without one.
-
-### Fixed
-
-- <kbd>o</kbd> opens the https page of a package whose recipe has
-  `:protocol ssh`. It passed the ssh address to the browser.
-
 ## [0.2.0] - 2026-10-20
 
 ### Added
@@ -36,6 +22,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - <kbd>X</kbd> (or <kbd>C-u x</kbd>) also pulls the marked packages whose
   dependencies are not met, with a warning for each.
 
+### Changed
+
+- straight.el is loaded when `M-x straight-overview` runs, not when
+  `straight-overview.el` is loaded. Without straight.el installed, the
+  command signals an error. The package now loads and byte-compiles
+  without straight.el, which is not on a package archive.
+- A pins file that does not hold a list of `(PACKAGE . COMMIT)` is ignored
+  with a warning. It was ignored without one.
+
 ### Fixed
 
 - With Magit, <kbd>c</kbd> reuses a visible changelog window also when
@@ -45,6 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Every overview buffer starts sorted by package name. After a reversed
   sort, overview buffers created later in the session started in reverse
   order.
+- <kbd>o</kbd> opens the https page of a package whose recipe has
+  `:protocol ssh`. It passed the ssh address to the browser.
 
 ## [0.1.0] - 2026-10-04
 
