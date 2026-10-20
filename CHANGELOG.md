@@ -13,6 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `straight-overview.el` is loaded. Without straight.el installed, the
   command signals an error. The package now loads and byte-compiles
   without straight.el, which is not on a package archive.
+- A pins file that does not hold a list of `(PACKAGE . COMMIT)` is ignored
+  with a warning. It was ignored without one.
+
+### Fixed
+
+- <kbd>o</kbd> opens the https page of a package whose recipe has
+  `:protocol ssh`. It passed the ssh address to the browser.
 
 ## [0.2.0] - 2026-10-20
 

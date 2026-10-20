@@ -39,6 +39,9 @@
 (unless (require 'straight nil t)
   (defvar straight--recipe-cache (make-hash-table :test #'equal))
   (defvar straight-display-subprocess-prompts nil)
+  (defvar straight-hosts '((github :https "https://github.com/user/repo.git")))
+  (defun straight--host-spec (host)
+    (alist-get host straight-hosts))
   (defun straight--repos-dir (&rest segments)
     (apply #'file-name-concat temporary-file-directory segments))
   (defun straight-vc-git--encode-url (repo host &optional _protocol)
@@ -240,17 +243,30 @@ days after `so-test--time'."
                    ("refs/remotes/origin/main" "ghi" "300" nil nil)))))
 
 (ert-deftest straight-overview-test-url ()
-  (cl-letf (((symbol-function 'straight-vc-git--encode-url)
-             (lambda (repo host &optional protocol)
-               (format "%s://%s.com/%s.git" protocol host repo))))
-    (should (equal (straight-overview--url '(:repo "user/pkg" :host github))
-                   "https://github.com/user/pkg"))
-    (should (equal (straight-overview--url '(:repo "user/pkg" :host github :protocol ssh))
-                   "ssh://github.com/user/pkg"))
-    (should-not (straight-overview--url '(:host github))))
-  (cl-letf (((symbol-function 'straight-vc-git--encode-url)
-             (lambda (&rest _) (error "Unknown host"))))
-    (should-not (straight-overview--url '(:repo "user/pkg" :host nowhere)))))
+  (let ((straight-hosts '((github :https "https://github.com/user/repo.git")
+                          (sshonly :ssh "git@example.com:user/repo.git"))))
+    (cl-letf (((symbol-function 'straight--host-spec)
+               (lambda (host) (alist-get host straight-hosts)))
+              ((symbol-function 'straight-vc-git--encode-url)
+               (lambda (repo host &optional protocol)
+                 (should (eq protocol 'https))
+                 (string-replace "user/repo" repo
+                                 (plist-get (alist-get host straight-hosts)
+                                            :https)))))
+      (should (equal (straight-overview--url '(:repo "u/p" :host github))
+                     "https://github.com/u/p"))
+      ;; A browser cannot open the ssh URL the recipe clones from.
+      (should (equal (straight-overview--url '(:repo "u/p" :host github :protocol ssh))
+                     "https://github.com/u/p"))
+      (should (equal (straight-overview--url '(:repo "https://example.com/u/p.git"))
+                     "https://example.com/u/p"))
+      (should-not (straight-overview--url '(:repo "git@example.com:u/p.git")))
+      (should-not (straight-overview--url '(:host github)))
+      ;; Where `straight-vc-git--encode-url' would signal an error.
+      (should-not (straight-overview--url '(:repo "u/p" :host nowhere)))
+      (should-not (straight-overview--url '(:repo "u/p" :host sshonly)))
+      (should-not (straight-overview--url '(:repo "https://github.com/u/p"
+                                              :host github))))))
 
 (ert-deftest straight-overview-test-version ()
   (should (equal (straight-overview--version "1.2.3") '(1 2 3)))
@@ -297,6 +313,23 @@ days after `so-test--time'."
       (with-temp-file straight-overview-pinned-file (insert "((\"beta\" . \"def\"))"))
       (straight-overview--ensure-pins)
       (should (equal straight-overview--pins '(("alpha" . "abc123")))))))
+
+(ert-deftest straight-overview-test-pins-invalid-file ()
+  (so-test-with-env
+    (let ((file (expand-file-name "pins.eld" so-test--root))
+          warnings)
+      (cl-letf (((symbol-function 'display-warning)
+                 (lambda (_type message &rest _) (push message warnings))))
+        ;; Empty: no pins, no warning.
+        (with-temp-file file)
+        (should-not (straight-overview--read-pins file))
+        (should-not warnings)
+        (dolist (text '("((\"alpha\" . " "alpha" "(\"alpha\")"))
+          (with-temp-file file (insert text))
+          (should-not (straight-overview--read-pins file)))
+        (should (= (length warnings) 3))
+        (should (string-match-p "does not hold a list of (PACKAGE \\. COMMIT)"
+                                (car warnings)))))))
 
 (ert-deftest straight-overview-test-pins-no-file ()
   (so-test-with-env

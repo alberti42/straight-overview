@@ -5,6 +5,7 @@
 ;; Author: Andrea Alberti <a.alberti82@gmail.com>
 ;; Maintainer: Andrea Alberti <a.alberti82@gmail.com>
 ;; Assisted-by: Claude:claude-opus-4-8
+;; Assisted-by: Claude:claude-opus-5-5
 ;; Version: 0.2.0
 ;; Package-Requires: ((emacs "29.1"))
 ;; Keywords: convenience, tools, vc
@@ -26,52 +27,36 @@
 
 ;;; Commentary:
 ;;
-;; `straight-overview' is a read-only overview and selective-upgrade UI for
-;; packages managed by straight.el.  It answers the question "which of my
-;; packages have newer commits upstream, and how far behind am I?" and lets
-;; you upgrade only the ones you choose -- instead of the all-or-nothing
-;; `straight-pull-all'.
+;; Upgrade straight.el packages one by one instead of all at once.
 ;;
-;; `M-x straight-overview' opens a `tabulated-list-mode' buffer with one row
-;; per git-managed package:
+;; `M-x straight-overview' lists your straight packages and how many
+;; commits and days each is behind its upstream branch:
 ;;
-;;   Pin | Package | Installed | Branch | Behind | Tag | Remote
+;;   # | Pin | Package | Installed | Branch | Behind | Tag | Remote
 ;;
-;; The "Behind" column shows `(<commits>; <time>)' -- how many commits and how
-;; much wall-clock time the installed checkout is behind the tracked upstream
-;; branch.  By default only outdated packages are shown.
+;; Behind is (<commits>; <time>).  By default only packages that are
+;; behind are listed.  The list is read from the local git refs, which
+;; are as recent as the last fetch.  In the list:
 ;;
-;; The list is built from local git refs (no network), running git for all
-;; packages in parallel.  The displayed "behind" figures reflect the last
-;; time each remote was fetched; press `G' to fetch all remotes in parallel
-;; and refresh.
+;;   G        fetch all remotes in parallel, in the background
+;;   g        rescan the local refs (no fetch)
+;;   m u U M  mark, unmark, unmark all, mark all outdated packages
+;;   x        pull the marked packages, after checking their
+;;            dependencies with package.el's rules
+;;   X        pull the marked packages, also those whose dependencies
+;;            are not met
+;;   P F R    pin the package at its installed commit, remove the pin,
+;;            reset the package to its pinned commit
+;;   c        show the commits a pull would bring in
+;;   o RET    open the package's repository in a browser
+;;   a        show all packages / only outdated ones
 ;;
-;; Packages are marked dired-style and acted on in a batch:
+;; `M-x customize-group RET straight-overview' lists the options.
 ;;
-;;   m   mark for update          x   pull marked (+ rebuild if enabled)
-;;   u   unmark                   c   show changelog (HEAD..upstream)
-;;   U   unmark all               o / RET  open repo in browser
-;;   M   mark all outdated        a   toggle outdated-only / all
-;;   g   re-scan (local, no fetch)
-;;   G   fetch all remotes in the background, then re-scan
-;;   X   pull marked, also those whose dependencies are not met
-;;
-;; Packages can also be pinned (held), which marks them in the Pin column,
-;; fades the row, and makes them un-markable:
-;;
-;;   P   pin at the current commit       R   restore to the pinned commit
-;;   F   free (unpin)
-;;
-;; Pins persist to `straight-overview-pinned-file' when set.
-;;
-;; Customize `straight-overview-fetch-on-open', `straight-overview-show',
-;; `straight-overview-build-on-pull' and `straight-overview-pinned-file' to
-;; taste.
-;;
-;; Requires a working straight.el installation (https://github.com/radian-software/straight.el).
-;; straight.el is not distributed through a package archive, so it cannot be
-;; expressed as a normal package dependency; `straight-overview' loads it
-;; when it runs, and signals an error if it is not installed.
+;; straight.el is not on a package archive, so it is not in
+;; `Package-Requires'; `straight-overview' loads it when it runs and
+;; signals an error if it is not installed.  straight.el is at
+;; https://github.com/radian-software/straight.el.
 ;;
 ;;; Code:
 
@@ -95,6 +80,8 @@
 ;; `Package-Requires'; `straight-overview' loads it when it runs.
 (defvar straight--recipe-cache)
 (defvar straight-display-subprocess-prompts)
+(defvar straight-hosts)
+(declare-function straight--host-spec "ext:straight" (host))
 (declare-function straight--repos-dir "ext:straight" (&rest segments))
 (declare-function straight-vc-git--encode-url "ext:straight"
                   (repo host &optional protocol))
@@ -239,10 +226,26 @@ The symbol `unknown' until `straight-overview--ahead-behind-p' checks.")
     (setq straight-overview--pins
           (when (and straight-overview-pinned-file
                      (file-readable-p straight-overview-pinned-file))
-            (with-temp-buffer
-              (insert-file-contents straight-overview-pinned-file)
-              (ignore-errors (read (current-buffer)))))
+            (straight-overview--read-pins straight-overview-pinned-file))
           straight-overview--pins-loaded t)))
+
+(defun straight-overview--read-pins (file)
+  "Return the alist of (PACKAGE-NAME . COMMIT) read from FILE.
+An empty FILE holds no pins.  A FILE that does not hold such an alist
+is ignored with a warning."
+  (let ((pins (with-temp-buffer
+                (insert-file-contents file)
+                (unless (string-blank-p (buffer-string))
+                  (condition-case nil
+                      (read (current-buffer))
+                    ((end-of-file invalid-read-syntax) 'invalid))))))
+    (if (and (listp pins) (cl-every #'consp pins))
+        pins
+      (display-warning
+       'straight-overview
+       (format "Ignoring %s: it does not hold a list of (PACKAGE . COMMIT)"
+               file))
+      nil)))
 
 (defun straight-overview--save-pins ()
   "Persist `straight-overview--pins' to `straight-overview-pinned-file'."
@@ -444,15 +447,23 @@ fork whose HEAD commit post-dates the tracked tip) render as \"<1d\"."
           (t (format "%dh" (max 1 (/ seconds 3600)))))))
 
 (defun straight-overview--url (recipe)
-  "Return a clickable web URL for RECIPE, or nil."
-  (let ((repo (plist-get recipe :repo))
-        (host (plist-get recipe :host))
-        (protocol (plist-get recipe :protocol)))
-    (when repo
-      (let ((url (ignore-errors
-                   (straight-vc-git--encode-url repo host (or protocol 'https)))))
-        (when url
-          (replace-regexp-in-string "\\.git\\'" "" url))))))
+  "Return the web page of RECIPE's repository, or nil.
+Without a `:host', a `:repo' that is an http(s) URL is the page.  With
+one, the page is the https URL `straight-vc-git--encode-url' builds,
+when it can build one: nil when the host is not in `straight-hosts',
+has no https URL, or `:repo' contains a colon."
+  (let* ((repo (plist-get recipe :repo))
+         (host (plist-get recipe :host))
+         (url (cond
+               ((null repo) nil)
+               ((null host) (and (string-match-p "\\`https?://" repo) repo))
+               ;; The cases in which `straight-vc-git--encode-url' signals
+               ;; an error.
+               ((and (alist-get host straight-hosts)
+                     (plist-get (straight--host-spec host) :https)
+                     (not (string-match-p ":" repo)))
+                (straight-vc-git--encode-url repo host 'https)))))
+    (and url (string-remove-suffix ".git" url))))
 
 (cl-defstruct (straight-overview--repo
                (:constructor straight-overview--make-repo)
@@ -577,9 +588,8 @@ package, then the fallback calls that the first round shows are needed."
       (cl-loop for (repo slot . _job) in fallbacks
                for out in (straight-overview--git-batch (mapcar #'cddr fallbacks))
                do (setf (cl-struct-slot-value 'straight-overview--repo slot repo) out)))
-    (sort (delq nil (mapcar (lambda (repo)
-                              (ignore-errors (straight-overview--record repo ahead-behind)))
-                            repos))
+    (sort (mapcar (lambda (repo) (straight-overview--record repo ahead-behind))
+                  repos)
           (lambda (a b)
             (string< (plist-get a :name) (plist-get b :name))))))
 
@@ -1044,7 +1054,11 @@ Prefers NAME-pkg.el, then NAME.el, wherever they sit in the tree."
   "Return the version list of STRING, a version header, or nil.
 nil when STRING is not a version, as for `package-strip-rcs-id'."
   (and (stringp string)
-       (ignore-errors (version-to-list (package-strip-rcs-id string)))))
+       ;; `version-to-list' signals `error' for a string that is not a
+       ;; version, also from inside `package-strip-rcs-id'.
+       (condition-case nil
+           (version-to-list (package-strip-rcs-id string))
+         (error nil))))
 
 (defun straight-overview--prepare-requires (reqs)
   "Return REQS, read from `Package-Requires', as (PACKAGE MIN-VERSION) lists.
