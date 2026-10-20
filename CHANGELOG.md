@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The current row is highlighted with `hl-line-mode`. Set
   `straight-overview-hl-line` to nil to turn this off.
+- <kbd>x</kbd> pulls each package after the marked packages it depends on. A
+  package whose `Package-Requires` at the upstream tip names a dependency
+  that is not installed, or older than required, is skipped with a warning.
 
 ## [0.1.0] - 2026-10-04
 

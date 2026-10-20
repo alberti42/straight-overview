@@ -80,6 +80,9 @@
 (require 'straight)
 ;; For the `dired-mark' / `dired-marked' faces that the mark styling inherits.
 (require 'dired)
+;; For reading `Package-Requires' and checking built-in versions.
+(require 'lisp-mnt)
+(require 'package)
 
 ;; Optional integration: `straight-overview-changelog' uses Magit when it is
 ;; available, but Magit is not a hard dependency.
@@ -1001,6 +1004,119 @@ rebuilds on the next restart.  A no-op if the package is not pinned."
                  (if straight-overview-build-on-pull
                      " (rebuilt)" " (rebuild on next restart)")))))))
 
+;;; Dependencies
+
+(defun straight-overview--find-record (name)
+  "Return the status plist for package NAME, or nil."
+  (seq-find (lambda (r) (equal (plist-get r :name) name))
+            straight-overview--records))
+
+(defun straight-overview--main-file (name dir rev)
+  "Return (PATH . TEXT) for package NAME's main file at REV in DIR, or nil.
+Prefers NAME-pkg.el, then NAME.el, wherever they sit in the tree."
+  (let ((files (split-string (or (straight-overview--git
+                                  dir "ls-tree" "-r" "--name-only" rev)
+                                 "")
+                             "\n" t)))
+    (cl-loop for base in (list (concat name "-pkg.el") (concat name ".el"))
+             for path = (seq-find (lambda (f) (equal (file-name-nondirectory f) base))
+                                  files)
+             when path
+             return (let ((text (straight-overview--git
+                                 dir "show" (format "%s:%s" rev path))))
+                      (and text (cons path text))))))
+
+(defun straight-overview--version (string)
+  "Return STRING as a version list, or nil if it is not a version."
+  (and (stringp string) (ignore-errors (version-to-list string))))
+
+(defun straight-overview--package-info (name dir rev)
+  "Return (VERSION . REQUIRES) for package NAME at REV in DIR, or nil.
+VERSION is a version list, nil when the package declares none.  REQUIRES
+lists (PACKAGE MIN-VERSION) from `Package-Requires' or the
+`define-package' form, MIN-VERSION being a version list."
+  (pcase (straight-overview--main-file name dir rev)
+    (`(,path . ,text)
+     (with-temp-buffer
+       (insert text)
+       (goto-char (point-min))
+       (pcase-let ((`(,version . ,reqs)
+                    (ignore-errors
+                      (if (string-suffix-p "-pkg.el" path)
+                          (let* ((form (read (current-buffer)))
+                                 (reqs (nth 4 form)))
+                            (cons (nth 2 form)
+                                  (if (eq (car-safe reqs) 'quote) (cadr reqs) reqs)))
+                        (cons (or (lm-header "package-version") (lm-header "version"))
+                              (let ((lines (lm-header-multiline "package-requires")))
+                                (and lines
+                                     (car (read-from-string
+                                           (string-join lines " "))))))))))
+         (cons (straight-overview--version version)
+               (delq nil (mapcar
+                          (lambda (req)
+                            (let ((min (straight-overview--version
+                                        (or (car-safe (cdr-safe req)) "0"))))
+                              (and (symbolp (car-safe req)) min
+                                   (list (car req) min))))
+                          (and (listp reqs) reqs)))))))))
+
+(defun straight-overview--requires (name)
+  "Return the (PACKAGE MIN-VERSION) requirements of NAME at its upstream tip."
+  (let ((rec (straight-overview--find-record name)))
+    (cdr (straight-overview--package-info
+          name (plist-get rec :dir) (or (plist-get rec :upstream) "HEAD")))))
+
+(defun straight-overview--unmet (name reqs)
+  "Return the requirements in REQS that package NAME would pull without.
+REQS is from `straight-overview--requires'.  Each element is
+\(PACKAGE MIN-VERSION HAVE), HAVE describing what is installed.  A
+dependency in NAME's own repo is read at the upstream tip, any other at
+HEAD.  A dependency that declares no version counts as met."
+  (let* ((rec (straight-overview--find-record name))
+         (dir (plist-get rec :dir))
+         (upstream (or (plist-get rec :upstream) "HEAD"))
+         unmet)
+    (pcase-dolist (`(,dep ,min) reqs)
+      (let* ((dep-rec (straight-overview--find-record (symbol-name dep)))
+             (dep-dir (plist-get dep-rec :dir))
+             (have
+              (cond
+               (dep-rec
+                (let ((version (car (straight-overview--package-info
+                                     (symbol-name dep) dep-dir
+                                     (if (equal dep-dir dir) upstream "HEAD")))))
+                  (and version (version-list-< version min)
+                       (package-version-join version))))
+               ((package-built-in-p dep min) nil)
+               ((eq dep 'emacs) emacs-version)
+               ((package-built-in-p dep) "older built-in")
+               (t "not installed"))))
+        (when have
+          (push (list dep min have) unmet))))
+    (nreverse unmet)))
+
+(defun straight-overview--pull-order (reqs)
+  "Return the package names in REQS, each after the marked packages it needs.
+REQS is an alist (NAME . REQUIREMENTS).  NAME needs a marked package
+whose repo holds one of NAME's requirements."
+  (let ((names (mapcar #'car reqs))
+        order visited)
+    (cl-labels ((dir (name) (plist-get (straight-overview--find-record name) :dir))
+                (visit (name)
+                  (unless (member name visited)
+                    (push name visited)
+                    (let ((dep-dirs (delq nil (mapcar (lambda (req)
+                                                        (dir (symbol-name (car req))))
+                                                      (cdr (assoc name reqs))))))
+                      (dolist (other names)
+                        (when (and (not (equal other name))
+                                   (member (dir other) dep-dirs))
+                          (visit other))))
+                    (push name order))))
+      (mapc #'visit names))
+    (nreverse order)))
+
 ;;; Actions
 
 (defun straight-overview--record-at-point ()
@@ -1021,7 +1137,11 @@ rebuilds on the next restart.  A no-op if the package is not pinned."
      (straight-overview--behind-secs (car b))))
 
 (defun straight-overview-execute ()
-  "Pull every marked package, optionally rebuilding, then refresh."
+  "Pull every marked package, optionally rebuilding, then refresh.
+Each package is pulled after the marked packages it depends on.  A
+package whose `Package-Requires' at the upstream tip names a dependency
+that is not installed, or older than required, is skipped with a
+warning."
   (interactive)
   (let ((names (straight-overview--marked)))
     (if (null names)
@@ -1030,15 +1150,34 @@ rebuilds on the next restart.  A no-op if the package is not pinned."
              (format "Pull %d package(s)%s? "
                      (length names)
                      (if straight-overview-build-on-pull " and rebuild" "")))
-        (dolist (name names)
-          (message "straight-overview: pulling %s..." name)
-          (when (straight-pull-package name)
-            (when straight-overview-build-on-pull
-              (message "straight-overview: rebuilding %s..." name)
-              (straight-rebuild-package name))))
-        (clrhash straight-overview--marks)
-        (straight-overview-refresh)
-        (message "straight-overview: done")))))
+        (let ((reqs (mapcar (lambda (name)
+                              (cons name (straight-overview--requires name)))
+                            names))
+              (skipped 0))
+          (dolist (name (straight-overview--pull-order reqs))
+            (let ((unmet (straight-overview--unmet name (cdr (assoc name reqs)))))
+              (if unmet
+                  (progn
+                    (cl-incf skipped)
+                    (display-warning
+                     'straight-overview
+                     (format "%s was not pulled; it requires %s"
+                             name
+                             (mapconcat
+                              (pcase-lambda (`(,dep ,min ,have))
+                                (format "%s %s (installed: %s)"
+                                        dep (package-version-join min) have))
+                              unmet ", "))))
+                (message "straight-overview: pulling %s..." name)
+                (when (straight-pull-package name)
+                  (when straight-overview-build-on-pull
+                    (message "straight-overview: rebuilding %s..." name)
+                    (straight-rebuild-package name))))))
+          (clrhash straight-overview--marks)
+          (straight-overview-refresh)
+          (message "straight-overview: done%s"
+                   (if (zerop skipped) ""
+                     (format "; %d skipped, see *Warnings*" skipped))))))))
 
 (defun straight-overview-browse ()
   "Open the remote URL of the package at point in a browser."

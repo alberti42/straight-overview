@@ -66,6 +66,9 @@ top of straight's own data and commands; it adds a UI, not a new model.
   failed, timed out, or needed credentials.
 - **Selective, dired-style upgrades.** Mark the packages you want, then
   execute. No more updating 100 packages to get the one you cared about.
+  Each package is pulled after the marked packages it depends on. A package
+  whose `Package-Requires` at the upstream tip names a dependency that is not
+  installed, or older than required, is skipped with a warning.
 - **Pinning (holds).** Pin a package to *hold* it: it stays visible (faded, with
   a `*` in the Pin column) but can't be marked for update, so you won't pull it
   by accident. Pinning records the installed commit, and <kbd>R</kbd> resets the
@@ -99,7 +102,7 @@ Requires Emacs 29.1+.
 | <kbd>u</kbd> | unmark |
 | <kbd>U</kbd> | unmark all |
 | <kbd>M</kbd> | mark all outdated packages |
-| <kbd>x</kbd> | pull marked packages (and rebuild, if enabled) |
+| <kbd>x</kbd> | pull marked packages (and rebuild, if enabled); a package whose dependencies are not installed, or older than required, is skipped with a warning |
 | <kbd>P</kbd> | pin the package at point at its current commit (hold) |
 | <kbd>F</kbd> | free (unpin) the package at point |
 | <kbd>R</kbd> | restore the package at point to its pinned commit (no-op if unpinned) |
@@ -151,6 +154,13 @@ side window at the bottom:
   A fetch only updates remote refs, so those checks are not needed for it.
   Pulling with <kbd>x</kbd> still goes through `straight-pull-package` and its
   checks.
+- **The dependency check reads version headers.** <kbd>x</kbd> reads each
+  marked package's `Package-Requires` (or its `-pkg.el`) at the upstream tip,
+  and each dependency's `Version` header: at the upstream tip if the
+  dependency lives in the same repository, otherwise at HEAD, after the
+  marked packages it needs have been pulled. A dependency that declares no
+  version counts as met. Built-in packages and Emacs itself are checked with
+  `package-built-in-p`.
 - **Credentials are asked for at the end, one repository at a time.** The
   parallel fetches cannot prompt: a remote that asks for a username,
   password or passphrase fails instead of waiting. Git runs in the C locale,
