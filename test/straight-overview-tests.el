@@ -684,6 +684,16 @@ days after `so-test--time'."
         (should (string-match-p "\\`2 packages are behind the remote"
                                 (overlay-get straight-overview--banner 'before-string)))))))
 
+(ert-deftest straight-overview-test-needs-straight ()
+  ;; straight.el is loaded when the overview opens, not with the package.
+  (let ((require (symbol-function 'require)))
+    (cl-letf (((symbol-function 'require)
+               (lambda (feature &rest args)
+                 (unless (eq feature 'straight)
+                   (apply require feature args)))))
+      (should (equal (cadr (should-error (straight-overview) :type 'user-error))
+                     "This command needs straight.el, which is not installed")))))
+
 (ert-deftest straight-overview-test-open-no-hl-line ()
   (so-test-with-env
     (so-test--package "alpha")

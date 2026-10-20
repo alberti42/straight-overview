@@ -70,15 +70,14 @@
 ;;
 ;; Requires a working straight.el installation (https://github.com/radian-software/straight.el).
 ;; straight.el is not distributed through a package archive, so it cannot be
-;; expressed as a normal package dependency; it is assumed to be already
-;; loaded.
+;; expressed as a normal package dependency; `straight-overview' loads it
+;; when it runs, and signals an error if it is not installed.
 ;;
 ;;; Code:
 
 (require 'cl-lib)
 (require 'subr-x)
 (require 'tabulated-list)
-(require 'straight)
 ;; For the `dired-mark' / `dired-marked' faces that the mark styling inherits.
 (require 'dired)
 ;; For reading `Package-Requires' and checking built-in versions.
@@ -87,10 +86,22 @@
 
 ;; Optional integration: `straight-overview-changelog' uses Magit when it is
 ;; available, but Magit is not a hard dependency.
-(declare-function magit-log-setup-buffer "magit-log"
+(declare-function magit-log-setup-buffer "ext:magit-log"
                   (revs args files &optional locked focus))
 ;; Special, so `straight-overview-changelog' binds it dynamically.
 (defvar magit-display-buffer-function)
+
+;; straight.el is not on a package archive, so it is not in
+;; `Package-Requires'; `straight-overview' loads it when it runs.
+(defvar straight--recipe-cache)
+(defvar straight-display-subprocess-prompts)
+(declare-function straight--repos-dir "ext:straight" (&rest segments))
+(declare-function straight-vc-git--encode-url "ext:straight"
+                  (repo host &optional protocol))
+(declare-function straight-pull-package "ext:straight"
+                  (package &optional from-upstream))
+(declare-function straight-rebuild-package "ext:straight"
+                  (package &optional recursive))
 
 (defgroup straight-overview nil
   "Overview of straight.el packages and their upstream status."
@@ -1353,6 +1364,8 @@ actionable (RET to inspect it, etc.); otherwise fall back to a plain
 With prefix arg FETCH, also start fetching all remotes in the background;
 the overview refreshes when the fetch ends."
   (interactive "P")
+  (unless (require 'straight nil t)
+    (user-error "This command needs straight.el, which is not installed"))
   (let ((do-fetch (cond (fetch t)
                         ((eq straight-overview-fetch-on-open t) t)
                         ((eq straight-overview-fetch-on-open 'ask)

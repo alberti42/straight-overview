@@ -1,6 +1,6 @@
 EMACS ?= emacs
 
-.PHONY: test lint
+.PHONY: test lint compile
 
 test:
 	$(EMACS) --batch -Q -L . -l test/straight-overview-tests.el \
@@ -12,3 +12,13 @@ lint:
 	@out=$$($(EMACS) --batch -Q --eval '(progn (require (quote checkdoc)) (checkdoc-file "straight-overview.el"))' 2>&1); \
 	  echo "$$out"; \
 	  ! echo "$$out" | grep -q '^straight-overview\.el:'
+	$(EMACS) --batch -Q --eval '(progn (require (quote check-declare)) (when (check-declare-file "straight-overview.el") (kill-emacs 1)) (message "check-declare: OK"))'
+
+# Byte-compiles a copy without straight.el or Magit on the `load-path',
+# warnings as errors, so no stale .elc is left next to the source.
+compile:
+	@dir=$$(mktemp -d); cp straight-overview.el "$$dir/"; \
+	  $(EMACS) --batch -Q -L "$$dir" --eval '(setq byte-compile-error-on-warn t)' \
+	    -f batch-byte-compile "$$dir/straight-overview.el"; \
+	  status=$$?; rm -rf "$$dir"; \
+	  if [ $$status -eq 0 ]; then echo "compile: OK"; fi; exit $$status

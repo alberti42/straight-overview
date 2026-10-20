@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- straight.el is loaded when `M-x straight-overview` runs, not when
+  `straight-overview.el` is loaded. Without straight.el installed, the
+  command signals an error. The package now loads and byte-compiles
+  without straight.el, which is not on a package archive.
+
 ## [0.2.0] - 2026-10-20
 
 ### Added
