@@ -122,6 +122,10 @@ from, so <kbd>x</kbd> skips only the packages whose requirements are not met
 and pulls the others. To upgrade a package together with a dependency it
 needs, mark both.
 
+<kbd>X</kbd> (or <kbd>C-u x</kbd>) runs the same check in the same order,
+but also pulls the packages <kbd>x</kbd> would skip; `*Warnings*` gets a line
+such as `forge was pulled although it requires magit 4.7 (installed: 4.6.0)`.
+
 ## Pinning
 
 <kbd>P</kbd> pins the package at point: the pin records the installed commit,
@@ -169,6 +173,7 @@ Or directly:
 | <kbd>U</kbd> | unmark all |
 | <kbd>M</kbd> | mark all outdated packages |
 | <kbd>x</kbd> | pull the marked packages, after checking their dependencies (and rebuild, if enabled) |
+| <kbd>X</kbd> | pull the marked packages, also those whose dependencies are not met |
 | <kbd>P</kbd> | pin the package at point at its installed commit |
 | <kbd>F</kbd> | remove the pin |
 | <kbd>R</kbd> | reset the package at point to its pinned commit |
@@ -219,7 +224,7 @@ the bottom:
   needs, or fail it while having them.
 - **straight.el is skipped.** Its header says `Version: prerelease`, which
   is not a version, so package.el would not install it and <kbd>x</kbd> does
-  not pull it. Pull it with `straight-pull-package`.
+  not pull it. Pull it with <kbd>X</kbd>.
 - **Shallow clones.** Commit counts and changelogs assume full clones,
   straight's default (`straight-vc-git-default-clone-depth` is `full`). For a
   shallow clone they can be too low.

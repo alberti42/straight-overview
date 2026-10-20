@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The check follows package.el's rules: a dependency without a version
   header has version 0, and a package whose header package.el could not
   read is skipped too.
+- <kbd>X</kbd> (or <kbd>C-u x</kbd>) also pulls the marked packages whose
+  dependencies are not met, with a warning for each.
 
 ### Fixed
 
