@@ -39,12 +39,15 @@
 ;; commits and days each is behind its upstream branch.  From that
 ;; list you can:
 ;;
-;; - fetch all remotes in parallel, in the background, while you
-;;   keep working;
+;; - fetch all remotes in parallel and asynchronously, in the
+;;   background, while you keep working;
 ;; - pull only the packages you mark.  Each package is pulled after
-;;   the marked packages it depends on, and a package whose
-;;   dependencies are missing or older than its `Package-Requires'
-;;   asks for is skipped with a warning;
+;;   the marked packages it depends on;
+;; - check dependency versions before a pull, with package.el's
+;;   rules: a package whose dependencies are missing or older than
+;;   its `Package-Requires' asks for is skipped with a warning.
+;;   straight.el reads `Package-Requires' but does not check the
+;;   versions it names;
 ;; - pin a package at its installed commit, so it cannot be marked
 ;;   for update, and later reset it to that commit;
 ;; - read the changelog of the commits a pull would bring in.
