@@ -29,14 +29,29 @@
 ;;
 ;; Upgrade straight.el packages one by one instead of all at once.
 ;;
+;; straight.el has `straight-pull-all', which pulls every package,
+;; and `straight-pull-package', which pulls one package by name.
+;; Neither tells you which packages have new commits.
+;; `straight-overview' shows that, then calls `straight-pull-package'
+;; for the packages you mark.
+;;
 ;; `M-x straight-overview' lists your straight packages and how many
-;; commits and days each is behind its upstream branch:
+;; commits and days each is behind its upstream branch.  From that
+;; list you can:
 ;;
-;;   # | Pin | Package | Installed | Branch | Behind | Tag | Remote
+;; - fetch all remotes in parallel, in the background, while you
+;;   keep working;
+;; - pull only the packages you mark.  Each package is pulled after
+;;   the marked packages it depends on, and a package whose
+;;   dependencies are missing or older than its `Package-Requires'
+;;   asks for is skipped with a warning;
+;; - pin a package at its installed commit, so it cannot be marked
+;;   for update, and later reset it to that commit;
+;; - read the changelog of the commits a pull would bring in.
 ;;
-;; Behind is (<commits>; <time>).  By default only packages that are
-;; behind are listed.  The list is read from the local git refs, which
-;; are as recent as the last fetch.  In the list:
+;; By default only packages that are behind are listed.  Opening the
+;; list does not contact the remotes: it reads the local git refs,
+;; which are as recent as the last fetch.  In the list:
 ;;
 ;;   G        fetch all remotes in parallel, in the background
 ;;   g        rescan the local refs (no fetch)
