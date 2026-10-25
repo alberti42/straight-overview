@@ -62,7 +62,7 @@ jobs:
           # The recipe to submit to MELPA.  The default file list takes
           # the top-level *.el files, which leaves out test/.
           RECIPE: (straight-overview :fetcher github :repo "alberti42/straight-overview")
-          # EXIST_OK stays unset while the package is not on MELPA: it
-          # would skip the check for a name that collides with an existing
-          # package.  Set it to 'true' once the package is on MELPA.
+          # The package is on MELPA, which the check for a name that
+          # collides with an existing package would report.
+          EXIST_OK: 'true'
         run: make -C ~/melpazoid

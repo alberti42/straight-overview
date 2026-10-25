@@ -1,6 +1,8 @@
 # straight-overview
 
 ![Made for GNU Emacs](https://img.shields.io/badge/Made%20for-GNU%20Emacs-7F5AB6?logo=gnuemacs&logoColor=white)
+[![MELPA](https://melpa.org/packages/straight-overview-badge.svg)](https://melpa.org/#/straight-overview)
+[![MELPA Stable](https://stable.melpa.org/packages/straight-overview-badge.svg)](https://stable.melpa.org/#/straight-overview)
 [![melpazoid](https://github.com/alberti42/straight-overview/actions/workflows/melpazoid.yml/badge.svg)](https://github.com/alberti42/straight-overview/actions/workflows/melpazoid.yml)
 [![CI](https://github.com/alberti42/straight-overview/actions/workflows/test.yml/badge.svg)](https://github.com/alberti42/straight-overview/actions/workflows/test.yml)
 [![License: GPL v3+](https://img.shields.io/github/license/alberti42/straight-overview)](LICENSE)
@@ -167,21 +169,25 @@ Without Magit, they open as a plain `git log --oneline` listing.
 
 ## Installation
 
-`straight-overview` needs straight.el and Emacs 29.1 or later. With
-`use-package`:
+`straight-overview` needs straight.el and Emacs 29.1 or later. The package is
+on [MELPA](https://melpa.org/#/straight-overview), and straight.el finds MELPA
+recipes by package name. With `use-package`:
 
 ```elisp
 (use-package straight-overview
-  :straight (:host github :repo "alberti42/straight-overview")
+  :straight t
   :commands (straight-overview))
 ```
 
 Or directly:
 
 ```elisp
-(straight-use-package
- '(straight-overview :host github :repo "alberti42/straight-overview"))
+(straight-use-package 'straight-overview)
 ```
+
+straight.el reads the recipes from its local clone of MELPA. If it cannot
+find a recipe for `straight-overview`, update the clone with `M-x
+straight-pull-recipe-repositories`.
 
 ## Keys
 
