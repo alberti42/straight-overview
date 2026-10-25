@@ -5,33 +5,45 @@
 [![CI](https://github.com/alberti42/straight-overview/actions/workflows/test.yml/badge.svg)](https://github.com/alberti42/straight-overview/actions/workflows/test.yml)
 [![License: GPL v3+](https://img.shields.io/github/license/alberti42/straight-overview)](LICENSE)
 
-An Emacs package for upgrading [straight.el](https://github.com/radian-software/straight.el)
-packages one by one instead of all at once.
+straight-overview is an add-on for the popular package manager
+[straight.el](https://github.com/radian-software/straight.el). This package
+adds an overview buffer (`M-x straight-overview`) in the style of Dired,
+showing which packages have new commits upstream. It uses
+`tabulated-list-mode` to present useful pieces of information like the
+installed commit SHA1, the branch, how many commits and days each package is
+behind its upstream branch, and the nearest tag when available.
 
 Disclosure: Written with AI assistance (Claude). Every change is reviewed
 and tested by the author, and design decisions are the author's.
 
-`M-x straight-overview` lists your straight packages and how many commits and
-days each is behind its upstream branch. From that list you can:
+It also synergizes with Magit and if the user presses <kbd>c</kbd>, it uses
+magit log to show an overview of the recently added commits, which are not
+installed yet. This is a quick way to see what a pull would bring in.
 
-- **fetch** all remotes in parallel and asynchronously, in the background,
-  while you keep working;
-- **pull** only the packages you mark. Each package is pulled after the
-  marked packages it depends on;
-- **check dependency versions** before a pull, with package.el's rules: a
-  package whose dependencies are missing or older than its
-  `Package-Requires` asks for is skipped with a warning. straight.el reads
-  `Package-Requires` but does not check the versions it names;
-- **pin** a package at its installed commit, so it cannot be marked for
-  update, and later reset it to that commit;
-- **read the changelog** of the commits a pull would bring in.
+straight-overview allows the user to pick and choose the packages they want
+to update. They can also pin a package at its installed commit, so it cannot
+be marked for update. straight-overview then calls the original
+`straight-pull-package` for the packages that were marked.
+
+straight-overview fetches the upstream repositories asynchronously and in
+parallel: these are external `git fetch` processes running in the background
+at once; their number is capped by `straight-overview-fetch-jobs`, set by
+default to 16 jobs. About 100 repositories take 3.5 s, and Emacs stays usable
+through the whole time. The original command in straight,
+`straight-fetch-all`, fetches one repository at a time, and Emacs is not
+responsive until all packages have been fetched.
 
 ![Pressing G starts the fetch while text is typed in another buffer](screenshot-fetch.gif)
 
-straight.el has `straight-pull-all`, which pulls every package, and
-`straight-pull-package`, which pulls one package by name. Neither tells you
-which packages have new commits. `straight-overview` shows that, then calls
-`straight-pull-package` for the packages you mark.
+straight-overview also supports version floor control, meaning that it skips
+a marked package, with a warning, when its dependencies are missing or older
+than its `Package-Requires` asks for. The version floor checks follow the
+rules of `package.el` in core Emacs. The marked packages are then pulled
+respecting the order of dependencies. In contrast, straight reads
+`Package-Requires` but keeps only the package names and drops the minimum
+versions (`straight--process-dependencies`). Because it never checks a
+dependency's version, it cannot ensure that the updated packages remain
+consistent with each other, fulfilling their dependencies.
 
 ## The list
 
