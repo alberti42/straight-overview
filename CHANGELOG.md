@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-25
+
+### Changed
+
+- The Commentary, which MELPA shows on the package's page, starts with
+  the overview buffer and describes the changelog, marking and pinning,
+  the parallel fetch, the dependency version check and the scan of the
+  local refs. The README opens with the same text.
+
 ## [0.2.0] - 2026-10-20
 
 ### Added
@@ -86,6 +95,7 @@ First release.
 - The overview opens in the selected window and honors
   `display-buffer-alist`, keyed on the buffer name `*straight-overview*`.
 
-[Unreleased]: https://github.com/alberti42/straight-overview/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/alberti42/straight-overview/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/alberti42/straight-overview/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/alberti42/straight-overview/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/alberti42/straight-overview/releases/tag/v0.1.0
