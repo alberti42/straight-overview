@@ -485,12 +485,17 @@ days after `so-test--time'."
 
 (ert-deftest straight-overview-test-collect-target-tag ()
   (so-test-with-env
-    (dolist (name '("alpha" "beta" "gamma" "delta"))
+    (dolist (name '("alpha" "beta" "gamma" "delta" "epsilon" "zeta"))
       (so-test--package name))
+    ;; A tag on a local commit that upstream does not have.
+    (let ((epsilon (straight--repos-dir "epsilon")))
+      (so-test--commit epsilon nil (1+ so-test--time))
+      (so-test--git epsilon "tag" "v1.0"))
     (dolist (name '("alpha" "gamma" "delta"))
       (so-test--git (so-test--upstream name) "tag" "v1.0")
       (so-test--git (straight--repos-dir name) "fetch" "-q" "--tags" "origin"))
-    (dolist (spec '(("alpha" . "v1.1") ("beta" . "v0.1") ("gamma")))
+    (dolist (spec '(("alpha" . "v1.1") ("beta" . "v0.1") ("gamma")
+                    ("epsilon") ("zeta")))
       (let ((upstream (so-test--upstream (car spec))))
         (so-test--commit upstream nil)
         (when (cdr spec)
@@ -503,7 +508,8 @@ days after `so-test--time'."
       (let ((straight-overview--ahead-behind ahead-behind))
         (should (equal (mapcar #'straight-overview--tag-cell
                                (straight-overview--collect))
-                       '("v1.0 → v1.1" "→ v0.1" "v1.0" "v1.0")))))))
+                       '("v1.0 → v1.1" "→ v0.1" "v1.0" "v1.0 → no tag"
+                         "v1.0" "")))))))
 
 (ert-deftest straight-overview-test-collect-detached ()
   (so-test-with-env

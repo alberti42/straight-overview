@@ -66,7 +66,9 @@ cloned with git:
   than yours. Sorting on this column sorts by time.
 - **Tag** is the nearest tag (`git describe --tags`). When the upstream
   branch has a different nearest tag, the cell shows both, `1.9 → 2.0`:
-  the tag before and after a pull.
+  the tag before and after a pull. `1.9 → no tag` means the upstream tip
+  has no tag in its history, which happens when upstream rewrote its
+  history.
 - **Remote** is the repository's web page.
 
 By default only packages that are behind are listed; <kbd>a</kbd> shows all

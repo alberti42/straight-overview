@@ -680,11 +680,13 @@ package, then the fallback calls that the first round shows are needed."
 
 (defun straight-overview--tag-cell (rec)
   "Return the Tag cell for REC.
-The cell is \"TAG → TARGET\" when a pull would move the nearest tag."
+The cell is \"TAG → TARGET\" when a pull would move the nearest tag,
+and \"TAG → no tag\" when the upstream tip has none."
   (let ((tag (plist-get rec :tag))
         (target (plist-get rec :target-tag)))
-    (cond ((member target (list tag "")) tag)
+    (cond ((equal target tag) tag)
           ((equal tag "") (concat "→ " target))
+          ((equal target "") (concat tag " → no tag"))
           (t (concat tag " → " target)))))
 
 (defun straight-overview--print-entry (id cols)
