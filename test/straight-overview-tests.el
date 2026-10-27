@@ -483,6 +483,28 @@ days after `so-test--time'."
           (should-not (plist-get b :outdated))
           (should (equal (plist-get b :tag) "")))))))
 
+(ert-deftest straight-overview-test-collect-target-tag ()
+  (so-test-with-env
+    (dolist (name '("alpha" "beta" "gamma" "delta"))
+      (so-test--package name))
+    (dolist (name '("alpha" "gamma" "delta"))
+      (so-test--git (so-test--upstream name) "tag" "v1.0")
+      (so-test--git (straight--repos-dir name) "fetch" "-q" "--tags" "origin"))
+    (dolist (spec '(("alpha" . "v1.1") ("beta" . "v0.1") ("gamma")))
+      (let ((upstream (so-test--upstream (car spec))))
+        (so-test--commit upstream nil)
+        (when (cdr spec)
+          (so-test--git upstream "tag" (cdr spec)))
+        (so-test--git (straight--repos-dir (car spec)) "fetch" "-q" "origin")))
+    (dolist (ahead-behind (delete-dups
+                           (list nil (and (straight-overview--ahead-behind-p
+                                           so-test--root)
+                                          t))))
+      (let ((straight-overview--ahead-behind ahead-behind))
+        (should (equal (mapcar #'straight-overview--tag-cell
+                               (straight-overview--collect))
+                       '("v1.0 → v1.1" "→ v0.1" "v1.0" "v1.0")))))))
+
 (ert-deftest straight-overview-test-collect-detached ()
   (so-test-with-env
     (let ((alpha (so-test--package "alpha"))

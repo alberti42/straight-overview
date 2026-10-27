@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The **Tag** column shows the tag a pull would bring in: `1.9 → 2.0`
+  when the upstream branch has a different nearest tag than the installed
+  commit. This costs one more `git describe` per package that is behind.
+
+### Changed
+
+- The **Tag** column is no longer sortable.
+
 ## [0.2.1] - 2026-10-25
 
 ### Changed

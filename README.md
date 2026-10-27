@@ -54,7 +54,7 @@ cloned with git:
 
 | # | Pin | Package | Installed | Branch | Behind | Tag | Remote |
 |---|-----|---------|-----------|--------|--------|-----|--------|
-| 1 |     | consult | a1b2c3d4  | main   | (3; 14d) | 1.9 | https://github.com/minad/consult |
+| 1 |     | consult | a1b2c3d4  | main   | (3; 14d) | 1.9 → 2.0 | https://github.com/minad/consult |
 
 - **#** numbers the rows in the current sort order.
 - **Pin** shows `*` for a pinned package.
@@ -64,7 +64,9 @@ cloned with git:
 - **Behind** is `(<commits>; <time>)`: how many commits the upstream branch
   has that your checkout does not, and how much newer its last commit is
   than yours. Sorting on this column sorts by time.
-- **Tag** is the nearest tag (`git describe --tags`).
+- **Tag** is the nearest tag (`git describe --tags`). When the upstream
+  branch has a different nearest tag, the cell shows both, `1.9 → 2.0`:
+  the tag before and after a pull.
 - **Remote** is the repository's web page.
 
 By default only packages that are behind are listed; <kbd>a</kbd> shows all
@@ -73,7 +75,8 @@ remote as of the last fetch.
 
 Opening the list does not contact the remotes: it reads the local git refs,
 which are as recent as the last fetch. Each package needs two git calls,
-`git for-each-ref` and `git describe`. The package runs them for all packages
+`git for-each-ref` and `git describe`, and a package that is behind needs a
+third, `git describe` at the upstream tip. The package runs them for all packages
 in parallel, at most `straight-overview-jobs` processes at once, and Emacs
 waits for the last one: 0.4 s for 111 packages on an 8-core Mac.
 <kbd>C-g</kbd> stops the scan and the git processes still running.
@@ -209,7 +212,7 @@ straight-pull-recipe-repositories`.
 | <kbd>G</kbd> | fetch all remotes in the background, then rescan; during a fetch, offer to cancel it |
 
 The keys of `tabulated-list-mode` also work, for example clicking a column
-header to sort.
+header to sort. Package, Branch and Behind are sortable.
 
 ## Customization
 

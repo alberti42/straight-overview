@@ -515,8 +515,9 @@ has no https URL, or `:repo' contains a colon."
   "Git state of one package, gathered by `straight-overview--collect'.
 REFS is parsed `for-each-ref' output, TAG the `describe' output.  HEAD
 \(\"HASH\\tTIMESTAMP\" on a detached HEAD) and COUNT (`rev-list --count'
-on git before 2.41) are fallbacks, nil when not needed."
-  name recipe dir remote refs tag head count)
+on git before 2.41) are fallbacks, nil when not needed.  TARGET is the
+`describe' output at the upstream tip, nil when HEAD is not behind."
+  name recipe dir remote refs tag head count target)
 
 (defun straight-overview--find-repo (name)
   "Return a `straight-overview--repo' for package NAME, or nil.
@@ -555,12 +556,19 @@ nil when the package is not a git clone."
 (defun straight-overview--fallbacks (repo ahead-behind)
   "Return (SLOT . JOB) pairs for the git commands REPO still needs.
 A detached HEAD needs `log -1 HEAD'; git before 2.41 (AHEAD-BEHIND nil)
-needs `rev-list --count'.  SLOT names the REPO field for the result."
+needs `rev-list --count'; an upstream with commits HEAD lacks needs
+`describe' at its tip.  SLOT names the REPO field for the result."
   (let ((dir (straight-overview--repo-dir repo))
+        (up (straight-overview--upstream-row repo))
         jobs)
     (unless (straight-overview--current repo)
       (push (cons 'head (list dir "log" "-1" "--format=%H%x09%ct" "HEAD")) jobs))
-    (when (and (not ahead-behind) (straight-overview--upstream-row repo))
+    ;; Without AHEAD-BEHIND the count is not known yet.
+    (when (and up (or (not ahead-behind) (> (nth 3 up) 0)))
+      (push (cons 'target (list dir "describe" "--tags" "--abbrev=0"
+                                (straight-overview--upstream repo)))
+            jobs))
+    (when (and (not ahead-behind) up)
       (push (cons 'count (list dir "rev-list" "--count"
                                (format "HEAD..%s" (straight-overview--upstream repo))))
             jobs))
@@ -582,6 +590,7 @@ AHEAD-BEHIND says whether REPO's refs carry behind counts."
          (head-ts (cadr head))
          (installed (if commit (substring commit 0 (min 8 (length commit))) "?"))
          (tag (or (straight-overview--repo-tag repo) ""))
+         (target (or (straight-overview--repo-target repo) ""))
          (url (straight-overview--url recipe))
          (commits (and up
                        (if ahead-behind
@@ -600,7 +609,8 @@ AHEAD-BEHIND says whether REPO's refs carry behind counts."
           :dir (straight-overview--repo-dir repo) :branch (or branch "?")
           :remote (straight-overview--repo-remote repo)
           :upstream upstream :url url :installed installed :commit commit
-          :tag tag :commits commits :behind behind
+          :tag tag :target-tag (if (and commits (> commits 0)) target tag)
+          :commits commits :behind behind
           :behind-secs (or behind-secs 0) :outdated outdated)))
 
 (defun straight-overview--collect ()
@@ -659,7 +669,7 @@ package, then the fallback calls that the first round shows are needed."
                                    (plist-get rec :installed)
                                    (plist-get rec :branch)
                                    behind
-                                   (plist-get rec :tag)
+                                   (straight-overview--tag-cell rec)
                                    (or (plist-get rec :url) ""))))
                  ;; Pinned rows are faded so "outdated but held" reads as parked.
                  (when pinned
@@ -667,6 +677,15 @@ package, then the fallback calls that the first round shows are needed."
                                        cells)))
                  (list name (apply #'vector cells)))))
            straight-overview--records))))
+
+(defun straight-overview--tag-cell (rec)
+  "Return the Tag cell for REC.
+The cell is \"TAG → TARGET\" when a pull would move the nearest tag."
+  (let ((tag (plist-get rec :tag))
+        (target (plist-get rec :target-tag)))
+    (cond ((member target (list tag "")) tag)
+          ((equal tag "") (concat "→ " target))
+          (t (concat tag " → " target)))))
 
 (defun straight-overview--print-entry (id cols)
   "Print the row ID with COLS, numbering it by its line in the buffer.
@@ -1404,7 +1423,7 @@ actionable (RET to inspect it, etc.); otherwise fall back to a plain
          ("Installed" 10 nil)
          ("Branch"    14 t)
          ("Behind"    18 straight-overview--behind-lessp)
-         ("Tag"       14 t)
+         ("Tag"       24 nil)
          ("Remote"     0 nil)])
   (when straight-overview-hl-line
     (hl-line-mode 1))
