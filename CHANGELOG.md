@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-27
+
 ### Added
 
 - The **Tag** column shows the tag a pull would bring in: `1.9 → 2.0`
@@ -105,7 +107,8 @@ First release.
 - The overview opens in the selected window and honors
   `display-buffer-alist`, keyed on the buffer name `*straight-overview*`.
 
-[Unreleased]: https://github.com/alberti42/straight-overview/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/alberti42/straight-overview/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/alberti42/straight-overview/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/alberti42/straight-overview/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/alberti42/straight-overview/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/alberti42/straight-overview/releases/tag/v0.1.0
