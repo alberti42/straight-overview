@@ -1314,8 +1314,14 @@ a warning naming what was not met."
               (if (and unmet (not force))
                   (cl-incf skipped)
                 (message "straight-overview: pulling %s..." name)
-                (when (straight-pull-package name)
-                  (when straight-overview-build-on-pull
+                ;; `straight-pull-package' returns nil without FROM-UPSTREAM,
+                ;; so compare HEAD to tell whether the pull changed anything.
+                (let* ((dir (plist-get (straight-overview--find-record name) :dir))
+                       (head (and dir (straight-overview--git dir "rev-parse" "HEAD"))))
+                  (straight-pull-package name)
+                  (when (and straight-overview-build-on-pull
+                             (not (equal head (and dir (straight-overview--git
+                                                        dir "rev-parse" "HEAD")))))
                     (message "straight-overview: rebuilding %s..." name)
                     (straight-rebuild-package name))))))
           (clrhash straight-overview--marks)

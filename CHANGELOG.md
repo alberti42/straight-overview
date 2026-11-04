@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- With `straight-overview-build-on-pull` set, <kbd>x</kbd> did not rebuild
+  the pulled packages: `straight-pull-package` returns nil after a
+  successful pull, and the rebuild depended on that value. A package is
+  now rebuilt when the pull moved its HEAD.
+  ([#3](https://github.com/alberti42/straight-overview/issues/3))
+
 ## [0.3.0] - 2026-10-27
 
 ### Added

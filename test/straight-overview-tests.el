@@ -921,7 +921,7 @@ mocked pull fast-forwards the package's clone."
                                  (plist-get (gethash name straight--recipe-cache)
                                             :local-repo))
                                 "merge" "-q" "--ff-only" "origin/main")
-                  t))
+                  nil))
                ((symbol-function 'straight-rebuild-package)
                 (lambda (name &rest _) (setq ,rebuilt (append ,rebuilt (list name)))))
                ((symbol-function 'yes-or-no-p) (lambda (_) t)))
@@ -1040,6 +1040,20 @@ mocked pull fast-forwards the package's clone."
           (straight-overview-execute)
           (should (equal pulled '("alpha" "gamma")))
           (should (equal rebuilt '("alpha" "gamma"))))))))
+
+(ert-deftest straight-overview-test-execute-no-rebuild-when-unchanged ()
+  (so-test-with-env
+    (so-test--three-packages)
+    (let ((straight-overview-build-on-pull t))
+      (with-current-buffer (so-test--open)
+        (straight-overview-mark-outdated)
+        (let (rebuilt)
+          (cl-letf (((symbol-function 'straight-pull-package) #'ignore)
+                    ((symbol-function 'straight-rebuild-package)
+                     (lambda (name &rest _) (push name rebuilt)))
+                    ((symbol-function 'yes-or-no-p) (lambda (_) t)))
+            (straight-overview-execute))
+          (should-not rebuilt))))))
 
 (ert-deftest straight-overview-test-execute-nothing ()
   (so-test-with-env
