@@ -170,7 +170,7 @@ debugging the built-in path)."
 (defcustom straight-overview-build-on-pull nil
   "When non-nil, also rebuild each package immediately after pulling.
 When nil, straight rebuilds the modified repos on the next Emacs
-restart (the merge registers a repo modification).
+restart (straight finds the files the pull changed).
 Also governs whether `straight-overview-restore' rebuilds in-session."
   :type 'boolean
   :group 'straight-overview)
