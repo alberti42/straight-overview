@@ -175,6 +175,15 @@ Also governs whether `straight-overview-restore' rebuilds in-session."
   :type 'boolean
   :group 'straight-overview)
 
+(defcustom straight-overview-require-valid-version nil
+  "When non-nil, do not pull a package whose version header is not a version.
+package.el refuses to install such a package.  When nil, the package is
+pulled and `*Warnings*' names the header; straight.el itself has
+`Version: prerelease'.  Either way, such a package never meets another
+package's version requirement."
+  :type 'boolean
+  :group 'straight-overview)
+
 (defcustom straight-overview-jobs nil
   "Maximum number of git processes to run at once while scanning local refs.
 nil uses the number of processors (`num-processors')."
@@ -1179,8 +1188,9 @@ no header (as in `package-vc'), nil when the header is not a version;
 
 (defun straight-overview--requires (name)
   "Return the (PACKAGE MIN-VERSION) requirements of NAME at its upstream tip.
-Signal an error where package.el would refuse to install NAME: when its
-requirements cannot be read, or its version header is not a version."
+Signal an error when its requirements cannot be read.  When its version
+header is not a version, signal an error if
+`straight-overview-require-valid-version' is non-nil, otherwise warn."
   (let* ((rec (straight-overview--find-record name))
          (info (straight-overview--package-info
                 name (plist-get rec :dir) (or (plist-get rec :upstream) "HEAD"))))
@@ -1188,7 +1198,12 @@ requirements cannot be read, or its version header is not a version."
      ((plist-get info :error)
       (error "%s" (plist-get info :error)))
      ((and info (null (plist-get info :version)))
-      (error "Invalid version header %S" (plist-get info :version-string))))
+      (if straight-overview-require-valid-version
+          (error "Invalid version header %S" (plist-get info :version-string))
+        (display-warning
+         'straight-overview
+         (format "%s has an invalid version header %S"
+                 name (plist-get info :version-string))))))
     (plist-get info :requires)))
 
 (defun straight-overview--unmet (name reqs)
@@ -1271,8 +1286,9 @@ whose repo holds one of NAME's requirements."
 Each package is pulled after the marked packages it depends on.  A
 package whose `Package-Requires' at the upstream tip names a dependency
 that is not installed, or older than required, is skipped with a
-warning.  The rules are package.el's: a package whose header package.el
-could not read is skipped too.
+warning.  A package whose `Package-Requires' cannot be read is skipped
+too, and so is one whose version header is not a version, if
+`straight-overview-require-valid-version' is non-nil.
 
 With prefix argument FORCE, those packages are pulled anyway, each with
 a warning naming what was not met."
@@ -1286,6 +1302,10 @@ a warning naming what was not met."
                      (if straight-overview-build-on-pull " and rebuild" "")
                      (if force ", ignoring unmet dependencies" "")))
         (let ((verb (if force "was pulled although" "was not pulled;"))
+              (hint (if force ""
+                      (substitute-command-keys
+                       "; \\<straight-overview-mode-map>\\[straight-overview-execute-force] \
+pulls it anyway, at your own risk")))
               reqs (skipped 0))
           (dolist (name names)
             (condition-case err
@@ -1296,21 +1316,22 @@ a warning naming what was not met."
                  (cl-incf skipped))
                (display-warning
                 'straight-overview
-                (format "%s %s its package header cannot be read: %s"
-                        name verb (error-message-string err))))))
+                (format "%s %s its package header cannot be read: %s%s"
+                        name verb (error-message-string err) hint)))))
           (setq reqs (nreverse reqs))
           (dolist (name (straight-overview--pull-order reqs))
             (let ((unmet (straight-overview--unmet name (cdr (assoc name reqs)))))
               (when unmet
                 (display-warning
                  'straight-overview
-                 (format "%s %s it requires %s"
+                 (format "%s %s it requires %s%s"
                          name verb
                          (mapconcat
                           (pcase-lambda (`(,dep ,min ,have))
                             (format "%s %s (installed: %s)"
                                     dep (package-version-join min) have))
-                          unmet ", "))))
+                          unmet ", ")
+                         hint)))
               (if (and unmet (not force))
                   (cl-incf skipped)
                 (message "straight-overview: pulling %s..." name)

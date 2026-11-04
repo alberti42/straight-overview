@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `straight-overview-require-valid-version`: when non-nil, <kbd>x</kbd>
+  skips a package whose version header is not a version, as before.
+
+### Changed
+
+- <kbd>x</kbd> pulls a package whose own version header is not a version,
+  such as straight.el's `Version: prerelease`, and `*Warnings*` names the
+  header. It used to skip it, as package.el refuses to install it. A
+  dependency whose version header is not a version still never meets a
+  requirement.
+- The warning for a package <kbd>x</kbd> skips ends with "X pulls it
+  anyway, at your own risk".
+
 ## [0.3.1] - 2026-11-04
 
 ### Fixed

@@ -670,7 +670,8 @@ days after `so-test--time'."
                      '((lib (0) "invalid version \"x.y\"")))))))
 
 (ert-deftest straight-overview-test-requires-errors ()
-  ;; Where package.el would refuse to install the package.
+  ;; Where package.el would refuse to install the package.  An invalid
+  ;; version header is an error only with `require-valid-version'.
   (so-test-with-env
     (so-test--package "badver" :files `(("badver.el" . ,(so-test--header "badver" "x.y"))))
     (so-test--package "badreq" :files `(("badreq.el" . ,(so-test--header
@@ -678,8 +679,14 @@ days after `so-test--time'."
     (so-test--package "nover" :files `(("nover.el" . ,(so-test--header "nover" nil "(bare)"))))
     (with-temp-buffer
       (setq-local straight-overview--records (straight-overview--collect))
-      (should (equal (cadr (should-error (straight-overview--requires "badver")))
-                     "Invalid version header \"x.y\""))
+      (let ((straight-overview-require-valid-version t))
+        (should (equal (cadr (should-error (straight-overview--requires "badver")))
+                       "Invalid version header \"x.y\"")))
+      (let (warnings)
+        (cl-letf (((symbol-function 'display-warning)
+                   (lambda (_type message &rest _) (push message warnings))))
+          (should-not (straight-overview--requires "badver")))
+        (should (equal warnings '("badver has an invalid version header \"x.y\""))))
       (should-error (straight-overview--requires "badreq"))
       (should (equal (straight-overview--requires "nover") '((bare (0))))))))
 
@@ -955,7 +962,7 @@ mocked pull fast-forwards the package's clone."
             (should-not pulled)))
         (should (equal warnings
                        '((straight-overview
-                          . "app was not pulled; it requires lib 2.0 (installed: 1.0)")))))
+                          . "app was not pulled; it requires lib 2.0 (installed: 1.0); X pulls it anyway, at your own risk")))))
       (should (plist-get (so-test--record "app") :outdated)))))
 
 (ert-deftest straight-overview-test-execute-skips-unreadable ()
@@ -977,6 +984,28 @@ mocked pull fast-forwards the package's clone."
         (should (string-prefix-p "alpha was not pulled; its package header cannot be read: "
                                  (car warnings)))))))
 
+(ert-deftest straight-overview-test-execute-invalid-version ()
+  ;; An invalid version header of the package itself only warns, unless
+  ;; `require-valid-version' is set.
+  (so-test-with-env
+    (so-test--package "pre")
+    (so-test--advance "pre" 1 `(("pre.el" . ,(so-test--header "pre" "prerelease"))))
+    (dolist (strict '(nil t))
+      (with-current-buffer (so-test--open)
+        (straight-overview-mark-outdated)
+        (let ((straight-overview-require-valid-version strict)
+              warnings)
+          (cl-letf (((symbol-function 'display-warning)
+                     (lambda (_type message &rest _) (push message warnings)))
+                    ((symbol-function 'straight-pull-package) #'ignore)
+                    ((symbol-function 'yes-or-no-p) (lambda (_) t)))
+            (straight-overview-execute))
+          (should (equal warnings
+                         (if strict
+                             '("pre was not pulled; its package header cannot be read: \
+Invalid version header \"prerelease\"; X pulls it anyway, at your own risk")
+                           '("pre has an invalid version header \"prerelease\"")))))))))
+
 (ert-deftest straight-overview-test-execute-bare-requirement ()
   ;; A bare symbol in Package-Requires still requires the package.
   (so-test-with-env
@@ -991,7 +1020,7 @@ mocked pull fast-forwards the package's clone."
             (straight-overview-execute)
             (should-not pulled)))
         (should (equal warnings
-                       '("app was not pulled; it requires no-such-package 0 (installed: not installed)")))))))
+                       '("app was not pulled; it requires no-such-package 0 (installed: not installed); X pulls it anyway, at your own risk")))))))
 
 (ert-deftest straight-overview-test-execute-force ()
   ;; X pulls what x skips, in dependency order, and warns.
@@ -1015,7 +1044,7 @@ mocked pull fast-forwards the package's clone."
         (should (equal prompt "Pull 2 package(s), ignoring unmet dependencies? "))
         (should (equal (sort warnings #'string<)
                        '("app was pulled although it requires lib 2.0 (installed: 1.0)"
-                         "broken was pulled although its package header cannot be read: Invalid version header \"x.y\""))))
+                         "broken has an invalid version header \"x.y\""))))
       (should-not (plist-get (so-test--record "app") :outdated)))))
 
 (ert-deftest straight-overview-test-execute-prefix-forces ()

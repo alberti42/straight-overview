@@ -122,13 +122,17 @@ repos on the next Emacs restart.
 
 Before pulling, <kbd>x</kbd> checks dependency versions with package.el's
 rules; where package.el would refuse to install a package, <kbd>x</kbd>
-skips it:
+skips it. The one exception is a package whose own version header is not
+a version, described in step 1:
 
 1. It reads each marked package's `Package-Requires` (or its `-pkg.el`) at
    the upstream tip, which is the version the pull would install. As in
    package.el, a bare `foo` or `(foo)` requires `foo` at any version. A
-   package whose requirements cannot be read, or whose own version header
-   is not a version, is skipped with a warning.
+   package whose requirements cannot be read is skipped with a warning. A
+   package whose own version header is not a version, such as straight.el's
+   `Version: prerelease`, is pulled, and `*Warnings*` names the header;
+   package.el would refuse to install it. Set
+   `straight-overview-require-valid-version` to skip it instead.
 2. It orders the pulls so that each package is pulled after the marked
    packages it depends on.
 3. Just before pulling a package, it reads the `Version` header of each
@@ -140,7 +144,9 @@ skips it:
    with `package-built-in-p`.
 4. A package whose dependency is not installed, or older than required, is
    not pulled; `*Warnings*` gets a line such as
-   `forge was not pulled; it requires magit 4.7 (installed: 4.6.0)`.
+   `forge was not pulled; it requires magit 4.7 (installed: 4.6.0); X pulls
+   it anyway, at your own risk`. A dependency whose version header is not a
+   version never meets a requirement.
 
 package.el, when a requirement is not met, installs a newer version from a
 package archive, or installs nothing. straight has no archive to install
@@ -225,6 +231,7 @@ header to sort. Package, Branch and Behind are sortable.
 | `straight-overview-hl-line` | `t` | When non-nil, highlight the current row with `hl-line-mode`. |
 | `straight-overview-changelog-use-magit` | `t` | When non-nil and Magit is loaded, <kbd>c</kbd> opens a `magit-log` buffer. `nil` always uses the plain `git log` listing. |
 | `straight-overview-build-on-pull` | `nil` | `nil` pulls only; straight rebuilds the modified repos on the next Emacs restart. `t` also runs `straight-rebuild-package` right after each pull, and after <kbd>R</kbd>. |
+| `straight-overview-require-valid-version` | `nil` | `nil` pulls a package whose version header is not a version, with a warning. `t` skips it, as package.el would; <kbd>X</kbd> pulls it anyway. |
 | `straight-overview-jobs` | `nil` | Maximum number of git processes run at once while scanning local refs. `nil` uses the number of processors (`num-processors`). |
 | `straight-overview-fetch-jobs` | `16` | Maximum number of `git fetch` processes run at once. A fetch mostly waits on its server, so more fetches than processors still pay off. |
 | `straight-overview-fetch-timeout` | `30` | Seconds after which a single repository's fetch is stopped and reported as timed out. `nil` means no limit. |
@@ -252,9 +259,6 @@ the bottom:
   each package's `Version` header. Many packages bump it only at releases,
   so a dependency can pass the check while missing commits the dependent
   needs, or fail it while having them.
-- **straight.el is skipped.** Its header says `Version: prerelease`, which
-  is not a version, so package.el would not install it and <kbd>x</kbd> does
-  not pull it. Pull it with <kbd>X</kbd>.
 - **Shallow clones.** Commit counts and changelogs assume full clones,
   straight's default (`straight-vc-git-default-clone-depth` is `full`). For a
   shallow clone they can be too low.
